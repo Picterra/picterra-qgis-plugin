@@ -1,0 +1,16 @@
+.vscode
+.settings
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.flake8.log
+dialog_*.py
+./dock.py
+resources.py
+*.qm
+picterra.zip
+Pipfile
+venv
+zip_build
+.DS_Store
+help/build

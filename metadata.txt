@@ -1,0 +1,73 @@
+# This file contains metadata for your plugin.
+# This file should be included when you package your plugin.
+# https://docs.qgis.org/2.18/en/docs/pyqgis_developer_cookbook/plugins.html#plugin-metadata
+
+
+###################### Elements needed for QGIS to load the plugin ###############
+
+# Mandatory items:
+
+[general]
+name=Picterra
+qgisMinimumVersion=3.0
+qgisMaximumVersion=3.99
+description=This plugins allows to interact with the Picterra platform, given you have an account
+about=This plugins allows to use Picterra image upload and detection functionalities: you can upload an image on the platform, annotate objects on them and run remotely in order to be returned with detection features. You need a Picterra API key to use this plugin.
+version=0.1
+author=Picterra
+email=support@picterra.ch
+license=LICENCE.GPL2
+
+
+homepage=https://picterra.ch/blog/introducing-the-picterra-qgis-plugin/
+tracker=https://github.com/picterra/picterra-qgis-plugin/issues
+repository=https://github.com/picterra/picterra-qgis-plugin
+# End of mandatory metadata
+
+# Recommended items:
+
+hasProcessingProvider=no
+# Uncomment the following line and add your changelog:
+# changelog=CHANGELOG:md
+
+# Tags are comma separated with spaces allowed
+tags=ml cv object detection agriculture drone satellite learning uav drone ngo sensor gis search
+
+
+#Category of the plugin: Raster, Vector, Database or Web
+category=Web
+icon=assets/icon.png
+
+# experimental flag
+experimental=True
+
+# deprecated flag (applies to the whole plugin, not just a single version)
+deprecated=False
+
+# Since QGIS 3.8, a comma separated list of plugins to be installed
+# (or upgraded) can be specified.
+# Check the documentation for more information.
+# plugin_dependencies=
+
+
+# If the plugin can run on QGIS Server.
+server=False
+
+
+###################### Plugins-specific configuration ###############
+
+# These are all the plugin settings that are not accessible nor editable from
+# the plugin "Settings" interface while the plugin is running
+[configuration]
+
+# Setup to false in release
+debug=False
+
+# Picterra Public API root endpoint
+api_server=https://app.picterra.ch/public/api
+
+# API version to use
+api_version=1
+
+# Picterra platform URI
+platform_server=https://app.picterra.ch

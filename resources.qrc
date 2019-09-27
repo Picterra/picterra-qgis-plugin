@@ -1,0 +1,19 @@
+<RCC>
+    <qresource prefix="/plugins/picterra" >
+        <file>assets/add.png</file>
+        <file>assets/detect.png</file>
+        <file>assets/download.png</file>
+        <file>assets/error.png</file>
+        <file>assets/help.png</file>
+        <file>assets/icon.png</file>
+        <file>assets/info.png</file>
+        <file>assets/ok.png</file>
+        <file>assets/platform.png</file>
+        <file>assets/settings.png</file>
+        <file>assets/spinner.gif</file>
+        <file>assets/tabs.png</file>
+        <file>assets/upload.png</file>
+        <file>assets/upload2.png</file>
+        <file>assets/warning.png</file>
+    </qresource>
+</RCC>
