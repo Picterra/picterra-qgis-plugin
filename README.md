@@ -14,6 +14,12 @@ Use [PEP 484](https://www.python.org/dev/peps/pep-0484/) type annotations plus [
 
 ## Dev
 
+### Dependencies
+
+You need `pb_tool` version 3.1.0
+
+### Building
+
 After editing the plugin, just run `make` to build a zip with the plugin. It
 will be outputted in zip_buil/picterra.zip.
 
