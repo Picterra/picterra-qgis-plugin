@@ -67,7 +67,7 @@ debug=False
 api_server=https://app.picterra.ch/public/api
 
 # API version to use
-api_version=1
+api_version=2
 
 # Picterra platform URI
 platform_server=https://app.picterra.ch

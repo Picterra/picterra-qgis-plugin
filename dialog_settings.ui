@@ -115,7 +115,7 @@
             <string>Picterra Public API version number</string>
            </property>
            <property name="toolTipDuration">
-            <number>1</number>
+            <number>2</number>
            </property>
            <property name="whatsThis">
             <string>Version of the Picterra API the plugin accesses</string>
@@ -127,13 +127,13 @@
             <string>v</string>
            </property>
            <property name="minimum">
-            <number>1</number>
+            <number>2</number>
            </property>
            <property name="maximum">
-            <number>1</number>
+            <number>2</number>
            </property>
            <property name="value">
-            <number>1</number>
+            <number>2</number>
            </property>
           </widget>
          </item>

@@ -186,8 +186,7 @@ class NetworkAccessManager(object):
         method="GET",
         body=None,
         headers=None,
-        redirections=DEFAULT_MAX_REDIRECTS,
-        connection_type=None,
+        query_params=None,
         blocking=True
     ):
         """
@@ -199,6 +198,8 @@ class NetworkAccessManager(object):
 
         self.blocking_mode = blocking
         req = QNetworkRequest()
+        if query_params:
+            url += "?" + urllib.parse.urlencode(query_params)
         # Avoid double quoting form QUrl
         url = urllib.parse.unquote(url)
         req.setUrl(QUrl(url))

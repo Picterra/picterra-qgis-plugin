@@ -70,30 +70,49 @@ class PicterraDialogDetect(QDialog):
         self.ui.button_box.helpRequested.connect(self.help)
         # Info button shows raster info dialog when clicked
         self.ui.info_selected_detector.clicked.connect(
-            lambda: self.show_object_info("detector"))
+            lambda: self.show_object_info("detector")
+        )
         self.ui.link_selected_detector.setIcon(
-            QIcon(':/plugins/picterra/assets/platform.png'))
-        self.ui.link_selected_detector.clicked.connect(
-            lambda: self.open_object_web())
+            QIcon(":/plugins/picterra/assets/platform.png")
+        )
+        self.ui.link_selected_detector.clicked.connect(lambda: self.open_object_web())
         # Fill the dropdown menus with the list of available
         # (trained) detectors and (uploaded) rasters names,
         # ordered by name (while API returns order by timestamp)
+        progressMessageBar = self.iface.messageBar().createMessage("Loading...")
+        progress = QProgressBar()
+        progress.setMaximum(10)
+        progressMessageBar.layout().addWidget(progress)
+        self.iface.messageBar().pushWidget(progressMessageBar, Qgis.Info)
+        progress.setValue(3)
         try:
+            progress.setValue(1)
+            sleep(0.5)
+            progress.setValue(2)
             rasters_list = self.api.get_rasters()
-            detectors_list = self.api.get_detectors()
-            for r in sorted(rasters_list, key=lambda x: x['name']):
+            progress.setValue(5)
+            detectors_list = self.api.get_detectors(is_runnable=True)
+            logger.warning("Got detectors: " + str(len(detectors_list)))
+            logger.warning(detectors_list[0]["name"])
+            logger.warning(detectors_list[-1]["name"])
+            progress.setValue(9)
+            sleep(1)
+            progress.setValue(10)
+            sleep(0.1)
+            self.iface.messageBar().clearWidgets()
+            for r in sorted(rasters_list, key=lambda x: x["name"]):
                 widget = QListWidgetItem()
                 widget.setData(Qt.EditRole, r["name"])
                 widget.setData(Qt.StatusTipRole, r["id"])
                 self.ui.rasters_menu.addItem(widget)
-            for d in sorted(detectors_list, key=lambda x: x['name']):
+            for d in sorted(detectors_list, key=lambda x: x["name"]):
                 self.ui.detector_menu.addItem(d["name"], d["id"])
             # Actions when dialog is opened with a non-empty selection
-            if 'index' in data:
-                if data['type'] == 'raster':
-                    self.ui.rasters_menu.setCurrentRow(data['index'])
-                elif data['type'] == 'detector':
-                    self.ui.detector_menu.setCurrentIndex(data['index'])
+            if "index" in data:
+                if data["type"] == "raster":
+                    self.ui.rasters_menu.setCurrentRow(data["index"])
+                elif data["type"] == "detector":
+                    self.ui.detector_menu.setCurrentIndex(data["index"])
         # Show error if above API calls fails
         except ApiError as e:
             error = str(e)
@@ -133,13 +152,19 @@ class PicterraDialogDetect(QDialog):
         try:
             for raster_item in raster_items:
                 raster_id = raster_item.data(Qt.StatusTipRole)
+
+                def err_cb():
+                    error = "Detect on %s failed" % raster_id
+                    self.ui.dlg_result.hide()
+                    logger.error(error)
+                    self.err_box = error_box(error)
+                    self.err_box.show()
+
                 self.api.detect(
-                    detector_id,
-                    raster_id,
-                    self.ui.dlg_result._result_callback
+                    detector_id, raster_id, self.ui.dlg_result._result_callback, err_cb
                 )
         except ApiError as e:
-            logger.error(str(e))
+            logger.error("Detect failed: " + str(e))
             self.ui.dlg_result._error_callback(raster_id)
         # Show loading spinner while waiting detection to finish
         spn_lbl = self.ui.dlg_result.ui.spinner_label
@@ -423,8 +448,18 @@ class PicterraDialogUpload(QDialog):
         self.ui.detectionarea_progress_bar_label.hide()
         # Fill the list of rasters
         try:
+            progressMessageBar = self.iface.messageBar().createMessage("Loading...")
+            progress = QProgressBar()
+            progress.setMaximum(10)
+            progressMessageBar.layout().addWidget(progress)
+            self.iface.messageBar().pushWidget(progressMessageBar, Qgis.Info)
+            sleep(0.5)
+            progress.setValue(3)
             rasters_list = self.api.get_rasters()
-            for r in sorted(rasters_list, key=lambda x: x['name']):
+            progress.setValue(10)
+            sleep(0.1)
+            self.iface.messageBar().clearWidgets()
+            for r in sorted(rasters_list, key=lambda x: x["name"]):
                 self.ui.raster_selection_combobox.addItem(r["name"], r["id"])
         except ApiError as e:
             error = str(e)
@@ -443,15 +478,15 @@ class PicterraDialogUpload(QDialog):
         da_file_widget.setStorageMode(QgsFileWidget.GetFile)
         da_file_widget.setFilter("GeoJSON (*.json *.geojson)")
         # Setup CTO signals
-        self.ui.start_upload_button.clicked.connect(
-            self.start_raster_upload)
+        self.ui.start_upload_button.clicked.connect(self.start_raster_upload)
         self.ui.start_detectionarea_upload_pushbutton.clicked.connect(
-            self.start_detectionarea_upload)
+            self.start_detectionarea_upload
+        )
         # Actions when dialog is opened with a non-empty selection
-        if 'type' in data:
-            if data['type'] == 'detection_area':
+        if "type" in data:
+            if data["type"] == "detection_area":
                 self.ui.tab_upload.setCurrentIndex(1)
-                self.ui.raster_selection_combobox.setCurrentIndex(data['index'])
+                self.ui.raster_selection_combobox.setCurrentIndex(data["index"])
 
     def _on_geojson_selection(self) -> None:
         self.ui.start_detectionarea_upload_pushbutton.setEnabled(True)
@@ -675,12 +710,10 @@ class PicterraDialogSettings(QWidget):
         self.ui.api_server_text.setText(urlparse(get_api_server()).netloc)
         try:
             if self.api.ping() == 200:
-                self.ui.nr_rasters.setText(str(
-                    len(self.api.get_rasters())))
-                self.ui.nr_detectors.setText(str(
-                    len(self.api.get_detectors())))
+                self.ui.nr_rasters.setText(str(self.api.get_rasters_count()))
+                self.ui.nr_detectors.setText(str(self.api.get_detectors_count()))
         except ApiError as e:
-            logger.error(str(e))
+            logger.error("Ping failed: " + str(e))
             self.ui.nr_rasters.setText(tr("N/A"))
             self.ui.nr_detectors.setText(tr("N/A"))
         # "QGIS settings" tab

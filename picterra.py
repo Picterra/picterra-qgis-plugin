@@ -339,7 +339,11 @@ configuration (Web > Picterra > Settings) and put a valid one.""")
         Needs network access and authentication credentials.
         """
         # Instantiate the dialog, passing the API wrapper
-        self.dlg = PicterraDialogUpload(data={"api": self.api})
+        data = {
+            "api": self.api,
+            "iface": self.iface
+        }
+        self.dlg = PicterraDialogUpload(data=data)
         # Show the dialog
         self.dlg.show()
         # Log dialog opening

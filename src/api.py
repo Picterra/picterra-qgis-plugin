@@ -96,6 +96,63 @@ class API:
         logger.debug("Sleeping %ds.." % sleep_time)
         time_sleep(sleep_time)
 
+    def _wait_until_operation_completes(
+        self, operation_id: str, poll_interval_s=30
+    ) -> dict:
+        """See Picterra Python wrapper"""
+        timeout_s: int = self.poll_timeout
+        while timeout_s > 0:  # Polling loop
+            logger.debug(
+                "Polling operation id %s every %d" % (operation_id, poll_interval_s)
+            )
+            resp = self._http(
+                method=HttpMethod.GET, endpoint="operations/%s/" % operation_id
+            )
+            if resp["status"] != 200:
+                raise ApiError("Error in GET operation: " + operation_id)
+            status = resp["data"]["status"]
+            logger.debug("status=%s" % status)
+            if status == "success":
+                return resp["data"]
+            elif status == "failed":
+                raise ApiError("Operation %s failed" % operation_id)
+            else:
+                timeout_s -= poll_interval_s
+                self.poll_sleep(poll_interval_s)
+        raise ApiError("Operation %s timed-out" % operation_id)
+
+    def _paginate_through_list(self, resource: str, params=None) -> dict:
+        """See Picterra Python wrapper"""
+        if params is None:
+            params = {}
+        params["page_number"] = 1
+        data = []
+        sleep_interval_s = 0
+        has_next = True
+        while has_next:
+            logger.debug("Paginating %s, fetching with %s" % (resource, params))
+            resp = self._http(
+                method=HttpMethod.GET, endpoint=resource + "/", query_params=params
+            )
+            if resp["status"] != 200:
+                raise ApiError("Error in GET " + resource)
+            r = resp["data"]
+            has_next = r["next"]
+            data += r["results"]
+            if r["count"] > 1000:
+                sleep_interval_s = 5
+            elif r["count"] > 500:
+                sleep_interval_s = 3
+            elif r["count"] > 100:
+                sleep_interval_s = 1
+            else:
+                sleep_interval_s = 0.1
+            if has_next:
+                params["page_number"] += 1
+                self.poll_sleep(sleep_interval_s)
+            else:
+                return data
+
     def _start_async_polling(self, main: Callable, callback: Callable, *args):
         """
         Launch an async operation.
@@ -356,14 +413,9 @@ class API:
         """
         # Log operation
         logger.info("Getting rasters list")
-        # Make request
-        r = self._http(method=HttpMethod.GET, endpoint="rasters/")
-        # Check response and return data or raise error
-        if r["status"] != 200 or "data" not in r:
-            raise ApiError("Error in GET rasters/")
-        return r["data"]
+        return self._paginate_through_list("rasters")
 
-    def get_detectors(self) -> List[dict]:
+    def get_detectors(self, **kwargs) -> List[dict]:
         """
         Get detectors list
 
@@ -375,16 +427,27 @@ class API:
         """
         # Log operation
         logger.info("Getting detectors list")
-        # Make request
-        r = self._http(method=HttpMethod.GET, endpoint="detectors/")
-        # Check response and return data or raise error
-        if r["status"] != 200 or "data" not in r:
-            raise ApiError("Error in GET detectors/")
-        return r["data"]
+        return self._paginate_through_list("detectors", kwargs)
+
+    def get_rasters_count(self) -> int:
+        resp = self._http(method=HttpMethod.GET, endpoint="rasters/")
+        if resp["status"] != 200:
+            raise ApiError("Error in GET rasters")
+        return resp["data"]["count"]
+
+    def get_detectors_count(self) -> int:
+        resp = self._http(
+            method=HttpMethod.GET,
+            endpoint="detectors/",
+            query_params={"is_runnable": True},
+        )
+        if resp["status"] != 200:
+            raise ApiError("Error in GET detectors")
+        return resp["data"]["count"]
 
     def check_detection(self) -> bool:
         """
-        Check the user account has enough info to detect
+        Check the user account has enough info to detect (1 raster and 1 detector)
 
         Returns:
             Whether or not we can launch a detection
@@ -392,41 +455,9 @@ class API:
         Raises:
             ApiError: if the server didn't send the right response code
         """
-        # Check we have at least one raster (may raise ApiError internally)
-        if len(self.get_rasters()) == 0:
-            raise ApiError(tr(
-                "Upload at least one raster in order to predict"))
-        # Check we have at least one detector (may raise ApiError internally)
-        if len(self.get_detectors()) == 0:
-            raise ApiError(tr(
-                "Train at least one detector in order to predict"))
-        # All good
-        return True
-
-    def get_result(self, result_pk: UUID) -> dict:
-        """
-        Get a single result
-
-        Args:
-            result_pk: UUID of the result (a DetectorRun)
-
-        Returns:
-            Metadata of the result
-
-        Raises:
-            ApiError: if the server didn't send the right response code
-        """
-        # Log operation
-        logger.info("Getting result=%s info" % result_pk)
-        # Make request
-        r = self._http(
-            method=HttpMethod.GET,
-            endpoint="results/%s/" % result_pk)
-        # Raise error or return result metadata
-        if r["status"] != 200:
-            raise ApiError(tr(
-                "Problem getting detection result, got %s" % r["status"]))
-        return r["data"]
+        if self.get_rasters_count() == 0:
+            return False
+        return self.get_detectors_count() != 0
 
     def get_detectionarea_upload(self, raster_pk: UUID, upload_pk: UUID) -> dict:
         """
@@ -629,24 +660,12 @@ class API:
         # Handle error
         if r["status"] != 201:
             raise ApiError(tr("Error starting raster processing"))
-        # Parse response and prepares for polling
-        poll_interval: int = r["data"]["poll_interval"]
-        assert poll_interval > 0
-        timeout: int = self.poll_timeout
-        # Poll until timeout or raster processing completion
-        while timeout > 0:
-            # Log poll
-            logger.debug("Polling raster=%s every %ds" % (raster_id, poll_interval))
-            try:
-                resp = self.get_raster(raster_id)
-            except ApiError:
-                return False
-            if resp["status"] == "ready":
-                break
-            timeout -= poll_interval
-            self.poll_sleep(poll_interval)
-        # Check we exited before timeout of the whole polling
-        return timeout > 0
+        # Parse response and polls
+        op_id = r["data"]["operation_id"]
+        poll_s = r["data"]["poll_interval"]
+        logger.debug("Polling raster upload operation %s" % op_id)
+        self._wait_until_operation_completes(op_id, poll_s)
+        return True
 
     def upload_detectionarea(
         self, raster_id: UUID, mime: str, content: bytes, size: int, callback: Callable
@@ -734,53 +753,33 @@ class API:
                 method="PUT",
                 headers=headers,
                 body=content,
-                blocking=True)
+                blocking=True,
+            )
         # Handle errors
         except RequestsException as e:
             raise ApiError(e)
         if response.status_code != 200:
-            raise ApiError(tr(
-                "Error uploading detection area file to remote cloud storage"
-            ))
+            raise ApiError(
+                tr("Error uploading detection area file to remote cloud storage")
+            )
         # Log blobstore upload
         logger.info("Successfully uploaded detection area for %s" % raster_id)
         # Start remote processing of the geometry file
         r = self._http(
             method=HttpMethod.POST,
-            endpoint='rasters/%s/detection_areas/upload/%s/commit/' % (
-                raster_id, upload_id
-            ),
-            size=0
+            endpoint="rasters/%s/detection_areas/upload/%s/commit/"
+            % (raster_id, upload_id),
+            size=0,
         )
         # Handle processing start error
         if r["status"] != 201:
             raise ApiError(tr("Error starting detection area processing"))
-        # Parse response and prepares for polling
-        poll_interval: int = r["data"]["poll_interval"]
-        assert poll_interval > 0
-        timeout: int = self.poll_timeout
-        # Polling loop
-        while timeout > 0:
-            # Log poll
-            logger.debug("Polling upload=%s every %ds" % (upload_id, poll_interval))
-            # Poll upload status (may raise ApiError internally)
-            resp = self.get_detectionarea_upload(raster_id, upload_id)
-            # Exit on response, decrease timeout, sleep
-            if resp["status"] == "ready":
-                break
-            if resp["status"] == "failed":
-                logger.error("Detection area commit failed")
-                return False
-                raise ApiError(tr("Error in detection area processing"))
-            timeout -= poll_interval
-            self.poll_sleep(poll_interval)
-        # Check we exited before timeout of the whole polling
-        if timeout <= 0:
-            logger.error("Detection area for %s commit timed-out" % raster_id)
-            return False
-        else:
-            logger.error("Successfully committed detection area for %s" % raster_id)
-            return True
+        # Parse response and polls
+        op_id = r["data"]["operation_id"]
+        poll_s = r["data"]["poll_interval"]
+        logger.debug("Polling detection area commit operation %s" % op_id)
+        self._wait_until_operation_completes(op_id, poll_s)
+        return True
 
 
 # define Python user-defined exceptions
