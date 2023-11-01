@@ -195,7 +195,7 @@
               <number>10</number>
              </property>
              <property name="maxCount">
-              <number>100</number>
+              <number>500</number>
              </property>
              <property name="sizeAdjustPolicy">
               <enum>QComboBox::AdjustToMinimumContentsLengthWithIcon</enum>
