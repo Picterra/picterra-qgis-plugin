@@ -71,7 +71,8 @@ exclude =
     # pb_tool files
     plugin_upload.py,
     # misc
-    *.flake8.log
+    *.flake8.log,
+    venv
 # Provide a comma-separate list of glob patterns to include for checks.
 filename =
     *.py
@@ -131,21 +132,3 @@ doctests = True
 include-in-doctest =
 # Specify which files are not to be checked by PyFlakes for doctest syntax.
 exclude-in-doctest =
- @Voldy87
- 
- 
-Leave a comment
-
-Attach files by dragging & dropping, selecting or pasting them.
-© 2019 GitHub, Inc.
-Terms
-Privacy
-Security
-Status
-Help
-Contact GitHub
-Pricing
-API
-Training
-Blog
-About

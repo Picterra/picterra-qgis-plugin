@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from qgis.core import QgsMapLayer, QgsRasterDataProvider, QgsVectorDataProvider
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import Qt, QSettings, QTranslator, QCoreApplication, QUrl
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QUrl
 from qgis.PyQt.QtGui import QIcon, QDesktopServices
-from qgis.PyQt.QtWidgets import QAction, QWidget, QMenu
+from qgis.PyQt.QtWidgets import QAction, QWidget
 # Initialize Qt resources from file resources.py
 from .resources import * # noqa
 from .src.api import API, ApiError
