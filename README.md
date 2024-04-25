@@ -51,27 +51,31 @@ QGIS 3 installation needs **Python 3**, which is needed by the Picterra plugin, 
 Install the **Plugin Reload** [plugin](https://plugins.qgis.org/plugins/plugin_reloader/) via the QGIS UI (see [here](https://docs.qgis.org/3.4/en/docs/training_manual/qgis_plugins/fetching_plugins.html)); the [QGIS Official Plugin Repository](https://plugins.qgis.org/plugins/) should have it without any further configuration.
 
 ###### Picterra Plugin
-You then need the Picterra plugin install to be able to reload it: to do so either use the [current zip from master](https://cloud.picterra.ch/public/qgis-plugin/archives/picterra-alpha-2020-06-12.zip) or create a new one as per the [Building section below](#building).
+You then need the Picterra plugin installed to be able to reload it: to do so either use the [current zip from master](https://cloud.picterra.ch/public/qgis-plugin/archives/picterra-alpha-2020-06-12.zip) or create a new one as per the [Building section below](#building).
 
-##### 2. Plugin Builder Tool
+##### 2. Create conda environment
 
-You then need the Python package **pb_tool** [version 3.1.0](https://pypi.org/project/pb-tool/) on your environment, that you can install via eg [pip](https://pip.pypa.io/en/stable/)
-
-```bash
-pip install pb_tool
-```
-
-The tool will also be available via the **pbt** alias.
-
-For the plugin to work, you also need `make`; the package is usually included by default in the O; if not, install it via eg `sudo apt install make`.
-
-##### 3. Install other needed packages
-
-You need to compile Qt files to Python, so install the [PyQt5 Auto Compiler ](https://pypi.org/project/pyqt5ac/):
+Create a [conda](https://docs.conda.io/) environment, activate it, and install Python v3.12:
 
 ```bash
-pip install pyqt5ac
+conda create --name picterra-qgis-plugin
+conda activate picterra-qgis-plugin
+conda install python=3.12
 ```
+
+##### 3. Install Python packages
+
+You need [pb_tool](https://pypi.org/project/pb-tool/) and the [PyQt5 Auto Compiler](https://pypi.org/project/pyqt5ac/).
+
+You can get previously tested versions by running:
+
+```bash
+pip install -r requirements.txt
+```
+
+`pb_tool` will also be available via the `pbt` alias.
+
+For the plugin to work, you also need `make`; the package is usually included by default in the OS; if not, install it via eg `sudo apt install make`.
 
 ##### 4. Compile the Qt resources file
 
