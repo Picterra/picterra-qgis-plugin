@@ -1,73 +1,62 @@
 # -*- coding: utf-8 -*-
+import configparser
 import enum
-import os
-import sys
 import inspect
 import mimetypes
-from typing import Union, Optional
+import os
+import sys
 from traceback import format_exc
-import configparser
+from typing import Literal, Optional, TypedDict, Union
 from urllib.parse import quote
 
-from qgis.core import QgsMessageLog, QgsLogger, Qgis, QgsSettings
+from qgis.core import Qgis, QgsLogger, QgsMessageLog, QgsSettings
+from qgis.PyQt.QtCore import (QCoreApplication, QLocale, QObject, QUrl,
+                              pyqtSignal)
 from qgis.PyQt.QtGui import QDesktopServices
-
-from qgis.PyQt.QtCore import QObject, pyqtSignal, QLocale, QUrl, \
-    QCoreApplication
 
 from .network import NetworkAccessManager, RequestsException
 
 SETTINGS_PREFIX = "picterra/"
 SETTINGS_TAG = "Picterra plugin"
 
-ALLOWED_SETTINGS = ("api_key", )
-
-
-class FaqLinks(enum.Enum):
-    DETECTION_AREAS = 1
-    SUPPORTED_IMAGES = 2
+ALLOWED_SETTINGS = ("api_key",)
 
 
 class BlogLinks(enum.Enum):
     GUIDE = 1
 
 
-WEBSITE_URL = 'https://picterra.ch/'
-FAQ_URL = WEBSITE_URL + 'faq/'
-UTM_SOURCE = '?utm_source=qgisplugin'
+WEBSITE_URL = "https://picterra.ch/"
+FAQ_URL = WEBSITE_URL + "faq/"
+UTM_SOURCE = "?utm_source=qgisplugin"
 EXTERNAL_LINKS = {
-    FaqLinks.DETECTION_AREAS: (
-        FAQ_URL + UTM_SOURCE + '#how-can-i-limit-the-area-in-which-the-detector-is-applied'
-    ),
-    FaqLinks.SUPPORTED_IMAGES: (
-        FAQ_URL + UTM_SOURCE + '#the-quality-of-my-uploaded-images-is-lower-than-the-original'
-    ),
-    BlogLinks.GUIDE: (
-        'https://picterra.ch/blog/introducing-the-picterra-qgis-plugin/'
-    )
+    # TODO update the guide / change link?
+    BlogLinks.GUIDE: ("https://picterra.ch/blog/introducing-the-picterra-qgis-plugin/")
 }
 
 
 # API http methods
 class HttpMethod(enum.Enum):
-    GET = '1'
-    POST = '2'
-    PUT = '3'
-    DELETE = '4'
+    GET = "1"
+    POST = "2"
+    PUT = "3"
+    DELETE = "4"
 
 
-class Logger():
+class Logger:
     """
     Wrapper for QGIS logger
 
     See
     https://docs.qgis.org/testing/en/docs/pyqgis_developer_cookbook/communicating.html?highlight=message%20bar#logging
     """
+
     class LoggerLevel(enum.Enum):
         DEBUG = 1
         INFO = 2
         WARNING = 3
         ERROR = 4
+
     DEBUG = LoggerLevel.DEBUG
     INFO = LoggerLevel.INFO
     WARNING = LoggerLevel.WARNING
@@ -81,7 +70,9 @@ class Logger():
         self.debug_flag = get_debug_flag()
         # Network manager
         self.network = NetworkAccessManager(debug=self.debug_flag)
-        QgsMessageLog.logMessage("Init logger with debug=%s" % self.debug_flag, level=Qgis.Info)
+        QgsMessageLog.logMessage(
+            "Init logger with debug=%s" % self.debug_flag, level=Qgis.Info
+        )
 
     def debug(self, message):
         return self._log(message, self.DEBUG)
@@ -111,11 +102,12 @@ class Logger():
         frame = callerframerecord[0]
         info = inspect.getframeinfo(frame)
         # prepare level message
-        msg = 'file=%s, func=%s, line=%s: %s' % (
+        msg = "file=%s, func=%s, line=%s: %s" % (
             info.filename,
             info.function,
             str(info.lineno),
-            message)
+            message,
+        )
         # Print to Log Message Panel
         # (https://qgis.org/pyqgis/master/core/QgsMessageLog.html#qgis.core.QgsMessageLog.logMessage)
         if self.debug_flag:
@@ -128,7 +120,7 @@ class Logger():
             elif level == self.WARNING:
                 QgsMessageLog.logMessage(msg, self.tag, level=Qgis.Warning)
             else:
-                raise Exception('Invalid log level: %s' % level)
+                raise Exception("Invalid log level: %s" % level)
         # Print to QGIS Python console
         else:
             # Do not use QgsLogger.fatal(msg), as it will crash QGIS process
@@ -138,17 +130,21 @@ class Logger():
                 QgsLogger.warning(msg)
             elif level in (self.DEBUG, self.INFO):
                 QgsLogger.debug(
-                    msg=message, file=info.filename,
-                    function=info.function, line=info.lineno)
+                    msg=message,
+                    file=info.filename,
+                    function=info.function,
+                    line=info.lineno,
+                )
         # always print to QGIS log file
         # must configure the QGIS_LOG_FILE environment variable
         QgsLogger.logMessageToFile("Picterra plugin - " + msg)
 
 
 class Worker(QObject):
-    '''
+    """
     Worker that is executed asynchronously by threads
-    '''
+    """
+
     def __init__(self, function, args):
         QObject.__init__(self)
         self.function = function
@@ -166,79 +162,94 @@ class Worker(QObject):
 
     def kill(self):
         self.killed = True
+
     finished = pyqtSignal(object)
     error = pyqtSignal(Exception)
     progress = pyqtSignal(float)
 
 
-def get_file_info(filename: str) -> dict:
+def get_file_info(filename: str):
     """Given a file path returns its size (in bytes) and its name"""
     if not os.path.isfile(filename):
-        return {}
+        return None
     st = os.stat(filename)
     name = os.path.basename(filename)
     mime = mimetypes.MimeTypes().guess_type(filename)[0]
-    return {
-        "size": st.st_size,
-        "name": name,
-        "mime": mime
-    }
+    return {"size": st.st_size, "name": name, "mime": mime}
+
+
+class PluginConfiguration(TypedDict):
+    api_server: str
+    debug: bool
 
 
 # Plugin configuration
-def get_plugin_config():
+def get_plugin_config() -> PluginConfiguration:
     """
     Get the dict of plugin parameters
     """
-    file_path = os.path.abspath(os.path.join(
-        os.path.dirname(__file__), os.pardir,
-        'metadata.txt'
-    ))
+    file_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir, "metadata.txt")
+    )
     config = configparser.ConfigParser()
     config.read(file_path)
     return config["configuration"]
 
 
-def get_api_server() -> str:
+def get_api_server():
     config = get_plugin_config()
-    return str(
-        os.getenv('QGIS_PICTERRA_API_BASE_URL', config['api_server'])
-    )
+    return str(os.getenv("QGIS_PICTERRA_API_BASE_URL", config["api_server"]))
 
 
-def get_api_version() -> int:
+def get_plugin_version():
+    metadata = get_plugin_metadata()
+    return metadata["version"]
+
+
+def get_api_base_url():
+    return get_api_server() + "/v2/"
+
+
+def get_platform_url():
+    return get_api_server().replace("/public/api", "")
+
+
+def get_debug_flag():
     config = get_plugin_config()
-    return int(
-        os.getenv('QGIS_PICTERRA_API_VERSION', config['api_version'])
-    )
+    return (int(os.getenv("QGIS_PICTERRA_DEBUG", 0)) == 1) or config["debug"]
 
 
-def get_api_base_url() -> str:
-    return get_api_server() + '/v' + str(get_api_version()) + '/'
+class PluginMetadataGeneral(TypedDict):
+    """See metadata.txt"""
+
+    about: str
+    author: str
+    category: Literal["Raster", "Vector", "Database", "Web"]
+    deprecated: bool
+    description: str
+    email: str
+    experimental: bool
+    homepage: str
+    icon: str
+    name: str
+    qgisMinimumVersion: float
+    qgisMaximumVersion: float
+    server: bool
+    tracker: str
+    version: float
 
 
-def get_platform_url() -> str:
-    return get_plugin_config()['platform_server']
-
-
-def get_debug_flag() -> bool:
-    config = get_plugin_config()
-    return (int(os.getenv('QGIS_PICTERRA_DEBUG', 0)) == 1) or config['debug']
-
-
-def get_plugin_metadata():
+def get_plugin_metadata() -> PluginMetadataGeneral:
     """Get the dict of plugin metadata"""
-    file_path = os.path.abspath(os.path.join(
-        os.path.dirname(__file__), os.pardir,
-        'metadata.txt'
-    ))
-    # https://docs.python.org/3/library/configparser.html
+    file_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir, "metadata.txt")
+    )
     config = configparser.ConfigParser()
     config.read(file_path)
     return config["general"]
 
 
-def set_setting(key: str, val: str) -> None:
+def set_setting(key: str, val: str):
     """
     Set a parameter in QGIS setting storage.
 
@@ -246,10 +257,7 @@ def set_setting(key: str, val: str) -> None:
     """
     if key not in ALLOWED_SETTINGS:
         raise KeyError("Invalid setting value: " + key)
-    QgsMessageLog.logMessage(
-        "Settings key: %s" % (key, ),
-        SETTINGS_TAG,
-        level=Qgis.Info)
+    QgsMessageLog.logMessage("Settings key: %s" % (key,), SETTINGS_TAG, level=Qgis.Info)
     s = QgsSettings()
     s.setValue(SETTINGS_PREFIX + key, val)
 
@@ -262,10 +270,7 @@ def get_setting(key: str) -> str:
     """
     if key not in ALLOWED_SETTINGS:
         raise KeyError("Invalid setting value: " + key)
-    QgsMessageLog.logMessage(
-        "Settings key: %s" % (key, ),
-        SETTINGS_TAG,
-        level=Qgis.Info)
+    QgsMessageLog.logMessage("Settings key: %s" % (key,), SETTINGS_TAG, level=Qgis.Info)
     s = QgsSettings()
     y = get_plugin_config()
     # get the setting value or its default one
@@ -291,6 +296,7 @@ def showPluginDoc(
         source = ""
         if packageName is None:
             import inspect
+
             source = inspect.currentframe().f_back.f_code.co_filename  # type: ignore
         else:
             source = sys.modules[packageName].__file__
@@ -299,8 +305,8 @@ def showPluginDoc(
         helpfile = os.path.join(path, filename + "-" + locale + ".html")
         if not os.path.exists(helpfile):
             helpfile = os.path.join(
-                path,
-                filename + "-" + locale.split("_")[0] + ".html")
+                path, filename + "-" + locale.split("_")[0] + ".html"
+            )
         if not os.path.exists(helpfile):
             helpfile = os.path.join(path, filename + "-en.html")
         if not os.path.exists(helpfile):
@@ -331,7 +337,7 @@ def tr(message: str) -> str:
         Translated version of message.
     """
     # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
-    return QCoreApplication.translate('Picterra', message)
+    return QCoreApplication.translate("Picterra", message)
 
 
 def download_file(url: str) -> Union[str, bool]:

@@ -1,22 +1,23 @@
 # -*- coding: utf-8 -*-
-from qgis.core import QgsMapLayer, QgsRasterDataProvider, QgsVectorDataProvider
-from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import Qt, QSettings, QTranslator, QCoreApplication, QUrl
-from qgis.PyQt.QtGui import QIcon, QDesktopServices
-from qgis.PyQt.QtWidgets import QAction, QWidget, QMenu
-# Initialize Qt resources from file resources.py
-from .resources import * # noqa
-from .src.api import API, ApiError
-from .src.utils import Logger, showPluginHelp, get_plugin_metadata, get_debug_flag, tr, \
-    get_plugin_config
-# Import the code for the dialog
-from .src.dialogs import PicterraDialogDetect, PicterraDialogUpload, PicterraDialogSettings, \
-    error_box
-
-from typing import Callable, List, Optional, Mapping, Match, Any
-
 import os.path
 from re import search
+from typing import Any, Callable, List, Mapping, Match, Optional
+
+from qgis.core import QgsMapLayer, QgsRasterDataProvider, QgsVectorDataProvider
+from qgis.gui import QgisInterface
+from qgis.PyQt.QtCore import QCoreApplication, QSettings, QTranslator, QUrl
+from qgis.PyQt.QtGui import QDesktopServices, QIcon
+from qgis.PyQt.QtWidgets import QAction, QWidget
+
+# Initialize Qt resources from file resources.py
+from .resources import *  # noqa
+from .src.api import API, ApiError
+# Import the code for the dialog
+from .src.dialogs import (PicterraDialogDetect, PicterraDialogEntities,
+                          PicterraDialogOperations, PicterraDialogSettings,
+                          PicterraDialogUpload, error_box)
+from .src.utils import (Logger, get_debug_flag, get_plugin_config,
+                        get_plugin_metadata, showPluginHelp, tr)
 
 logger = Logger(__file__)
 
@@ -36,12 +37,11 @@ class Picterra:
         self.plugin_name = "Picterra"
         self.category = get_plugin_metadata()["category"]
         if self.category:
-            assert self.category.lower() in (
-                "database", "raster", "vector", "web")
+            assert self.category.lower() in ("database", "raster", "vector", "web")
         # Setup Picterra Public API access
         self.api = API()
         # Define the sub-menus of the plugin
-        self.items = "upload", "detect", "help", "settings"
+        self.items = ("upload", "detect", "entities", "activity", "help", "settings")
         # Put only main items in the toolbar
         self.toolbar_categories = self.items[:2]
         # Save reference to the QGIS interface
@@ -49,11 +49,10 @@ class Picterra:
         # Initialize plugin directory
         self.plugin_dir = os.path.dirname(__file__)
         # Initialize locale
-        locale = QSettings().value('locale/userLocale')[0:2]
+        locale = QSettings().value("locale/userLocale")[0:2]
         locale_path = os.path.join(
-            self.plugin_dir,
-            'i18n',
-            '%s_%s.qm' % (self.plugin_name.lower(), locale))
+            self.plugin_dir, "i18n", "%s_%s.qm" % (self.plugin_name.lower(), locale)
+        )
         # Install translations
         if os.path.exists(locale_path):
             self.translator = QTranslator()
@@ -61,15 +60,15 @@ class Picterra:
             QCoreApplication.installTranslator(self.translator)
         # Setup QActions for the plugin
         self.actions: Mapping[str, List[QAction]] = dict()
-        self.actions['menus'] = []
-        self.actions['layers'] = []
-        self.menu = u'&%s' % tr(self.plugin_name)  # Main menu
+        self.actions["menus"] = []
+        self.actions["layers"] = []
+        self.menu = "&%s" % tr(self.plugin_name)  # Main menu
         # Check if plugin was started the first time in current QGIS session
         # Must be set in initGui() to survive plugin reloads
         self.first_start: Optional[bool] = None
         # Log start
-        debug = ('enabled' if get_debug_flag() else 'disabled')
-        logger.debug('Starting Picterra QGIS plugin with debug %s' % debug)
+        debug = "enabled" if get_debug_flag() else "disabled"
+        logger.debug("Starting Picterra QGIS plugin with debug %s" % debug)
 
     def add_menu_action(
         self,
@@ -82,7 +81,7 @@ class Picterra:
         add_to_toolbar: bool = True,
         status_tip: str = None,
         whats_this: str = None,
-        parent: QWidget = None
+        parent: QWidget = None,
     ) -> QAction:
         """
         Add a toolbar icon to the toolbar, associating it with an action linked
@@ -107,12 +106,9 @@ class Picterra:
             The action that was created.
         """
         if not menu_type:
-            logger.debug(
-                "Add action \"%s\" to \"plugin\" toolbar menu" % text)
+            logger.debug('Add action "%s" to "plugin" toolbar menu' % text)
         else:
-            logger.debug(
-                "Add action \"%s\" to \"%s\" toolbar menu" % (
-                    text, menu_type))
+            logger.debug('Add action "%s" to "%s" toolbar menu' % (text, menu_type))
         icon = QIcon(icon_path)
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
@@ -140,10 +136,7 @@ class Picterra:
                 self.iface.addPluginToWebMenu(self.menu, action)
             else:
                 logger.error("Invalid menu choice")
-                raise RuntimeError(
-                    "Invalid choice for action adding: %s" % menu_type)
-        # Updates actions array and return inserted elements
-        self.actions['menus'].append(action)
+                raise RuntimeError("Invalid choice for action adding: %s" % menu_type)
         return action
 
     def initGui(self) -> None:
@@ -157,33 +150,50 @@ class Picterra:
         # Clear menus actions
         self.unload()
         # Check all plugin actions were cleared
-        if len(self.actions['menus']) + len(self.actions['layers']) > 0:
-            logger.error('Some plugin actions were not cleared')
+        if len(self.actions["menus"]) + len(self.actions["layers"]) > 0:
+            logger.error("Some plugin actions were not cleared")
             return
         # Create menus actions
         for item in [i.lower() for i in self.items]:
-            self.add_menu_action(
-                ':/plugins/picterra/assets/%s.png' % item,
-                text=tr(u'%s' % item.capitalize()),
+            action = self.add_menu_action(
+                ":/plugins/picterra/assets/%s.png" % item,
+                text=tr("%s" % item.capitalize()),
                 callback=getattr(self, item),  # Each action is named as the menu item
                 parent=self.iface.mainWindow(),
                 menu_type=self.category,
-                add_to_toolbar=item in self.toolbar_categories
+                add_to_toolbar=item in self.toolbar_categories,
             )
+            self.actions["menus"].append(
+                action
+            )  # Updates actions array with inserted element
+        # Plugins are encouraged to insert help and about actions in this submenu, see
+        # qgis.org/pyqgis/master/gui/QgisInterface.html#qgis.gui.QgisInterface.pluginHelpMenu
+        self.help_action = self.add_menu_action(
+            ":/plugins/picterra/assets/help.png",
+            text="Picterra",
+            callback=getattr(self, "help"),
+            parent=self.iface.mainWindow(),
+            menu_type=self.category,
+            add_to_toolbar=False,
+            add_to_menu=False,
+        )
+        self.iface.pluginHelpMenu().addAction(self.help_action)  # TODO remove in unload
         # Create layers actions
-        icon = QIcon(':/plugins/picterra/assets/upload.png')
-        raster_upload_action = QAction(icon, u"Upload Layer as raster", self.iface)
+        icon = QIcon(":/plugins/picterra/assets/upload.png")
+        raster_upload_action = QAction(icon, "Upload Layer as raster", self.iface)
         raster_upload_action.triggered.connect(self._raster_layer_upload_cb)
         self.iface.addCustomActionForLayerType(
-            raster_upload_action, u"Picterra", QgsMapLayer.RasterLayer, True
+            raster_upload_action, "Picterra", QgsMapLayer.RasterLayer, True
         )
-        logger.debug("Add action \"Upload raster\" to \"plugin\" layers menu")
-        vector_upload_action = QAction(icon, u"Upload Layer as detection area", self.iface)
+        logger.debug('Add action "Upload raster" to "plugin" layers menu')
+        vector_upload_action = QAction(
+            icon, "Upload Layer as detection area", self.iface
+        )
         vector_upload_action.triggered.connect(self._vector_layer_upload_cb)
         self.iface.addCustomActionForLayerType(
-            vector_upload_action, u"Picterra", QgsMapLayer.VectorLayer, True
+            vector_upload_action, "Picterra", QgsMapLayer.VectorLayer, True
         )
-        logger.debug("Add action \"Upload detection area\" to \"plugin\" layers menu")
+        logger.debug('Add action "Upload detection area" to "plugin" layers menu')
         # Log plugin GUI loading
         logger.info("GUI initialization finished")
 
@@ -195,7 +205,7 @@ class Picterra:
         data: QgsRasterDataProvider = layer.dataProvider()
         file_path: str = data.dataSourceUri()
         # Log operation start
-        logger.info('Trying to upload %s raster from layers' % file_path)
+        logger.info("Trying to upload %s raster from layers" % file_path)
         # Tries to open upload dialog
         self.upload()  # After that if API is accessible, dlg should be PicterraDialogUpload
         # Fill the upload dialog with raster, focus on upload vector tab and start upload
@@ -215,12 +225,12 @@ class Picterra:
         data: QgsVectorDataProvider = layer.dataProvider()
         file_path: str = data.dataSourceUri()
         # QGIS appends a "layerXX" to the above URI, we need to remove it
-        regex = r'^(.*)\|(?:layerid|layername)=.*$'
+        regex = r"^(.*)\|(?:layerid|layername)=.*$"
         search_result: Optional[Match[Any]] = search(regex, file_path)
         if search_result:
             file_path = search_result.group(1)
         # Log operation start
-        logger.info('Setting %s vector (as detection area) from layers' % file_path)
+        logger.info("Setting %s vector (as detection area) from layers" % file_path)
         # Tries to open upload dialog
         self.upload()  # After that if API is accessible, dlg should be PicterraDialogUpload
         # Fill the upload dialog with the vector layer and focus on detection area tab
@@ -231,8 +241,8 @@ class Picterra:
     def unload(self) -> None:
         """Removes the plugin items from the QGIS GUI."""
         # Remove layers actions
-        while self.actions['layers']:
-            action = self.actions['layers'].pop()
+        while self.actions["layers"]:
+            action = self.actions["layers"].pop()
             self.iface.removeCustomActionForLayerType(action)
         # Remove menu actions
         if not self.category:
@@ -250,11 +260,13 @@ class Picterra:
             else:
                 logger.error("Invalid category choice")
                 raise RuntimeError("Invalid choice for category: %s" % cat)
-        while self.actions['menus']:
-            action = self.actions['menus'].pop()
+        while self.actions["menus"]:
+            action = self.actions["menus"].pop()
             remover(self.menu, action)
             self.iface.removeToolBarIcon(action)
             logger.debug("Unload plugin menu item %s" % action)
+        if hasattr(self, "help_action"):
+            remover(self.menu, self.help_action)
 
     def _check_api_access(self) -> bool:
         """
@@ -271,35 +283,35 @@ class Picterra:
         # No authentication: ask to check API key
         if ping in (401, 403):
             self.dlg = error_box(
-                tr("""It seems your API key is invalid: please go to plugin
-configuration (Web > Picterra > Settings) and put a valid one.""")
+                tr(
+                    """It seems your API key is invalid: please go to plugin
+configuration (Web > Picterra > Settings) and put a valid one."""
+                )
             )
             self.dlg.show()
-            logger.warning('API auth failed')
+            logger.warning("API auth failed")
             return False
         # Network error (client/server)
         elif ping != 200:
             error = True
         if error:
-            logger.warning('API ping failed')
-            email = get_plugin_metadata()["email"]
-            self.dlg = error_box(
-                tr("Network error, check your connection.") + "\n"
-                + tr("If the problem persists, contact") + " " + email
-            )
+            logger.warning("API ping failed")
+            self.dlg = error_box(tr("Network error, check your connection."))
             self.dlg.show()
             return False
-        logger.debug('API ping succeeded')
+        logger.debug("API ping succeeded")
         return True
 
     def check_access(fn):
         """Decorator for checking remote Picterra API availability"""
+
         def wrapped(self=None):
             # Check access and authentication
             if not self._check_api_access():
                 return
             else:
                 fn(self)
+
         return wrapped
 
     @check_access  # type: ignore
@@ -315,19 +327,11 @@ configuration (Web > Picterra > Settings) and put a valid one.""")
         Needs network access and authentication credentials.
         """
         # Check we have at least one detector and one raster
-        try:
-            self.api.check_detection()
-        except ApiError as e:
-            self.dlg = error_box(e)
-            self.dlg.show()
-            return
         # Prepare API wrapper and QgisInterface object references
-        data = {
-            "api": self.api,
-            "iface": self.iface
-        }
+        data = {"api": self.api, "iface": self.iface}
         # Creates and display the detect dialog, logging the event
         self.dlg = PicterraDialogDetect(data=data)
+        # self.dlg = PicterraDialogSelect(self.api, self.iface)
         self.dlg.show()
         logger.debug("Open detection dialog")
 
@@ -339,15 +343,29 @@ configuration (Web > Picterra > Settings) and put a valid one.""")
         Needs network access and authentication credentials.
         """
         # Instantiate the dialog, passing the API wrapper
-        data = {
-            "api": self.api,
-            "iface": self.iface
-        }
+        data = {"api": self.api, "iface": self.iface}
         self.dlg = PicterraDialogUpload(data=data)
         # Show the dialog
         self.dlg.show()
         # Log dialog opening
         logger.debug("Upload dialog opened")
+
+    @check_access  # type: ignore
+    def activity(self):
+        """Show the dialog TODO"""
+        data = {"api": self.api, "iface": self.iface}
+        self.dlg = PicterraDialogOperations(data=data)
+        # Show the dialog
+        self.dlg.show()
+        # Log dialog opening
+        logger.debug("Operations dialog opened")
+
+    @check_access  # type: ignore
+    def entities(self):
+        """Show the dialog TODO"""
+        self.dlg = PicterraDialogEntities(self.api)
+        self.dlg.show()
+        logger.debug("Entities dialog opened")
 
     def settings(self):
         """Show the dialog to manage plugin settings"""
@@ -364,5 +382,5 @@ configuration (Web > Picterra > Settings) and put a valid one.""")
 
     def platform(self):
         """Open link to web app"""
-        url = QUrl(get_plugin_config()['platform_server'])
+        url = QUrl(get_plugin_config()["platform_server"])
         QDesktopServices.openUrl(url)

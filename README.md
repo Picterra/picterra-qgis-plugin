@@ -110,7 +110,7 @@ pbt deploy -p <QGGIS_PLUGIN_FOLDER_PATH> -y
 
 in the plugin root directory (i.e. the one with the _src_ folder).
 
-At this point, if you open QGIS or, if it's already opened, reload the Picterra plugin via "the reload plugin" plugin, you should be able to see your Picterra plugin updated.
+At this point, if you open QGIS or, if it's already opened, reload the Picterra plugin via "the reload plugin" plugin (or just press `Ctrl+F5`), you should be able to see your Picterra plugin updated.
 
 If it does not happen, it could be due to conflicting versions from previous plugin installations: check that inside the profiles folder (`QGGIS_PLUGIN_FOLDER_PATH`) there is a "plugin" one with inside the updated code, but not a "picterra" folder (in case, you can safely delete it).
 
@@ -161,7 +161,16 @@ To increase the QGIS logging verbosity set the `QGIS_PICTERRA_DEBUG` environment
 
 ##### New UI assets / files
 
-TODO assets/...
+###### New dialogs
+Once created a new dialog via QT designer,
+1. add it to the **compiled_ui_files** list in `pb_tool.cfg`
+2. run `pbt compile`
+
+###### New assets
+Once a new asset (eg a PNG file) has been added to the assets folder
+1. update `resources.qrc`
+2. run `pbt compile`
+
 
 #### Building
 

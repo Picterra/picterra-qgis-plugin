@@ -3,30 +3,36 @@ import json
 import platform
 from re import search
 from time import sleep as time_sleep
-from typing import Callable, List, Optional, Union
-from uuid import UUID
+from typing import (Any, Callable, Dict, List, Literal, Optional, Tuple,
+                    TypedDict, Union)
 
 from qgis.PyQt.QtCore import QT_VERSION_STR, QLocale, QThread
 
 try:
-    from qgis.core import Qgis
+    from qgis.core import Qgis, QgsSettings
 except ImportError:
-    from qgis.core import QGis as Qgis
+    from qgis.core import QGis as Qgis, QgsSettings
 
 from .network import NetworkAccessManager, RequestsException
-from .utils import (
-    HttpMethod,
-    Logger,
-    Worker,
-    get_api_base_url,
-    get_api_version,
-    get_debug_flag,
-    get_plugin_metadata,
-    get_setting,
-    tr,
-)
+from .utils import (HttpMethod, Logger, Worker, get_api_base_url,
+                    get_debug_flag, get_platform_url, get_plugin_metadata,
+                    get_plugin_version, get_setting, tr)
 
 logger = Logger(__file__)
+
+
+class OperationMetadata(TypedDict):
+    detector_id: str
+    folder_id: str
+    raster_id: str
+
+
+class Operation(TypedDict):
+    status: Literal["running", "failed", "success"]
+    type: str
+    errors: dict | None
+    metadata: OperationMetadata | None
+    results: dict[str, Any] | None
 
 
 class API:
@@ -64,7 +70,7 @@ class API:
             # These info simplify server-side debugging and auditing
             "user-agent": "%s - QGIS/%s (%s %s, %s, Qt %s)"
             % (
-                "QGIS Picterra plugin v%s" % get_api_version(),
+                "QGIS Picterra plugin v%s" % get_plugin_version(),
                 Qgis.QGIS_VERSION,
                 platform.machine(),
                 platform.system(),
@@ -85,6 +91,75 @@ class API:
         self.threads = []
         # Log info
         logger.info("Built Api instance targeting %s" % self.base_url)
+        logger.info("Debug level is %s" % self.debug)
+
+    def _start_worker(
+        self, worker_main: Callable, success_cb: Callable, error_cb: Callable
+    ):
+        def main():
+            worker_main()
+
+        def worker_finished(index: int, ret: bool) -> None:
+            """
+            Called when threads successfully completes executing worker
+
+            The worker has successfully executed its code, but it does not
+            mean that it has successfully fullfilled its task
+
+            Args:
+                index: The index of the worker.
+                ret: Whether or not the thread returned success.
+
+            Raises:
+                ApiError: error during thread execution
+            """
+            # clean up the worker and thread
+            self.workers[index].deleteLater()
+            self.threads[index].quit()
+            self.threads[index].wait()
+            self.threads[index].deleteLater()
+            try:
+                if ret:
+                    logger.debug("Thread %d finished returning %s" % (index, ret))
+                    success_cb(ret)
+                else:
+                    logger.error("Thread %s terminated with error" % str(index))
+                    error_cb(False)
+            except ApiError as e:
+                logger.error("Thread %d raised an ApiError %s" % (index, e))
+
+        def worker_error(index: int, exception_string: str) -> None:
+            """
+            Executed when threads encounters an error during execution
+
+            Args:
+                index: The index of the worker.
+                exception_string: Th exception raised by the worker.
+
+            Raises:
+                ApiError: error during thread execution
+            """
+            logger.error(
+                "Worker %s raised an exception:\n%s" % (index, exception_string),
+            )
+            raise ApiError("Failure")
+
+        # Creates thread
+        self.threads.append(QThread())
+        # Create a worker for the thread, that will call the "main"
+        # function with the parameters in "args"
+        self.workers.append(Worker(function=main, args=[]))
+        assert len(self.threads) == len(self.workers)
+        index = len(self.threads) - 1
+        # Associate worker to threads
+        self.workers[index].moveToThread(self.threads[index])
+        # Assign worker success and fail callbacks
+        self.workers[index].finished.connect(lambda x: worker_finished(index, x))
+        self.workers[index].error.connect(lambda x: worker_error(index, x))
+        # Execute worker when threads starts
+        self.threads[index].started.connect(self.workers[index].run)
+        # Start thread
+        self.threads[index].start()
 
     def poll_sleep(self, poll_interval: int):
         """
@@ -121,44 +196,26 @@ class API:
                 self.poll_sleep(poll_interval_s)
         raise ApiError("Operation %s timed-out" % operation_id)
 
-    def _paginate_through_list(self, resource: str, params=None) -> dict:
+    def get_list(self, resource: str, params: dict) -> Tuple[List[dict], bool]:
         """See Picterra Python wrapper"""
-        if params is None:
-            params = {}
-        params["page_number"] = 1
-        data = []
-        sleep_interval_s = 0
         has_next = True
         while has_next:
-            logger.debug("Paginating %s, fetching with %s" % (resource, params))
+            logger.debug("Fetching %s with %s" % (resource, params))
             resp = self._http(
                 method=HttpMethod.GET, endpoint=resource + "/", query_params=params
             )
             if resp["status"] != 200:
                 raise ApiError("Error in GET " + resource)
             r = resp["data"]
-            has_next = r["next"]
-            data += r["results"]
-            if r["count"] > 1000:
-                sleep_interval_s = 5
-            elif r["count"] > 500:
-                sleep_interval_s = 3
-            elif r["count"] > 100:
-                sleep_interval_s = 1
-            else:
-                sleep_interval_s = 0.1
-            if has_next:
-                params["page_number"] += 1
-                self.poll_sleep(sleep_interval_s)
-            else:
-                return data
+            has_next = bool(r["next"])
+            return r["results"], has_next
 
-    def _start_async_polling(self, main: Callable, callback: Callable, *args):
+    def start_async_polling(self, running_operation_ids: List[str], callback: Callable):
         """
-        Launch an async operation.
+        Launch an async operation. TODO update
 
         Starts a thread for the function "main" and arguments
-        args: when it finishes it calls the callaback function
+        args: when it finishes it calls the callback function
         with the results, if there's no error
 
         Args:
@@ -170,74 +227,20 @@ class API:
             The return value. True for success, False otherwise.
         """
 
-        def worker_finished(index: int, ret: bool) -> None:
-            """
-            Called when threads successfully completes executing worker
+        def main():
+            while len(running_operation_ids) != 0:
+                self.poll_sleep(30)
+                for op_id in running_operation_ids:
+                    status = self.get_operation(op_id)["status"]
+                    if status != "running":
+                        running_operation_ids.remove(op_id)
+                        callback(op_id, status)
+                    self.poll_sleep(0.1)
 
-            The worker has successfully executed its code, but it does not
-            mean that it has successfully fullfilled its task
+        def error(e):
+            raise e
 
-            Args:
-                index: The index of the worker.
-                ret: Whether or not the thread returned success.
-
-            Raises:
-                ApiError: error during thread execution
-            """
-            # clean up the worker and thread
-            self.workers[index].deleteLater()
-            self.threads[index].quit()
-            self.threads[index].wait()
-            self.threads[index].deleteLater()
-            try:
-                if ret:
-                    logger.debug("Thread %d finished returning %s" % (index, ret))
-                    callback(ret)
-                else:
-                    logger.error("Thread %s terminated with error" % str(index))
-                    callback(False)
-            except ApiError as e:
-                logger.error("Thread %d raised an ApiError %s" % (index, e))
-
-        def worker_error(index: int, exception_string: str) -> None:
-            """
-            Executed when threads encounters an error during execution
-
-            Args:
-                index: The index of the worker.
-                exception_string: Th exception raised by the worker.
-
-            Raises:
-                ApiError: error during thread execution
-            """
-            logger.error(
-                "Worker %s raised an exception:\n%s" % (index, exception_string),
-            )
-            error = tr(
-                """Upload operation failed: please try again.\n
-            In case the error persists please contact """
-            )
-            email = get_plugin_metadata()["email"]
-            raise ApiError(error + email)
-
-        # Creates thread
-        self.threads.append(QThread())
-        # Create a worker for the thread, that will call the "main"
-        # function with the parameters in "args"
-        self.workers.append(Worker(function=main, args=args))
-        assert len(self.threads) == len(self.workers)
-        index = len(self.threads) - 1
-        # Associate worker to threads
-        self.workers[index].moveToThread(self.threads[index])
-        # Assign worker success and fail callbacks
-        self.workers[index].finished.connect(lambda x: worker_finished(index, x))
-        self.workers[index].error.connect(lambda x: worker_error(index, x))
-        # Execute worker when threads starts
-        self.threads[index].started.connect(self.workers[index].run)
-        # Start thread
-        self.threads[index].start()
-        # Log thread start
-        logger.debug("Start thread %s for %s" % (index, main.__name__))
+        self._start_worker(main, callback, error)
 
     @property
     def key(self) -> str:
@@ -264,7 +267,7 @@ class API:
         mime: Optional[str] = None,
         size: int = 0,
         headers_override: dict = {},
-    ) -> dict:
+    ):
         """
         Generic HTTP call to a Picterra API endpoint
 
@@ -326,9 +329,9 @@ class API:
             status = 521 if not s else int(s.group(1))
             return {"status": status}
         # Return response
-        status = response.status_code
+        status: int = response.status_code
         try:
-            data = json.loads(content.decode("utf-8"))
+            data: dict = json.loads(content.decode("utf-8"))
         except (json.decoder.JSONDecodeError, TypeError):
             return {"status": 500}
         return {"status": status, "data": data}
@@ -355,12 +358,39 @@ class API:
         logger.info("Pinged API with status %s" % res["status"])
         return res["status"]
 
-    def get_raster(self, raster_pk: UUID) -> dict:
+    def get_resource(self, resource: str, id: str):
+        """TODO"""
+        logger.info("Getting %s with id %s" % (resource, id))
+        path = "%s/%s/" % (resource, id)
+        r = self._http(method=HttpMethod.GET, endpoint=path)
+        if r["status"] != 200 or "data" not in r:
+            raise ApiError("Error in GET %s" % path)
+        return r["data"]
+
+    def get_operation(self, operation_id: str, add_metadata: bool = False) -> Operation:
+        op_data: Operation = self.get_resource("operations", operation_id)
+        if add_metadata and op_data["metadata"] is not None:
+            metadata = op_data["metadata"]
+            if metadata("raster_id", None):
+                op_data["raster"] = self.get_raster(metadata["raster_id"])
+            else:
+                op_data["raster"] = None
+            if metadata("detector_id", None):
+                op_data["detector"] = self.get_detector(metadata["detector_id"])
+            else:
+                op_data["detector"] = None
+            if metadata("folder_id", None):
+                op_data["folder"] = self.get_folder(metadata["folder_id"])
+            else:
+                op_data["folder"] = None
+        return op_data
+
+    def get_raster(self, raster_pk: str) -> dict:
         """
         Get raster details
 
         Args:
-            raster_pk: UUID of the raster whose details we are interested on
+            raster_pk: str of the raster whose details we are interested on
 
         Returns:
             The raster metadata
@@ -368,22 +398,29 @@ class API:
         Raises:
             ApiError: if the server didn't send the right response code
         """
-        # Log operation
-        logger.info("Getting raster=%s info" % raster_pk)
-        # Build URL and make request
-        path = "rasters/%s/" % raster_pk
-        r = self._http(method=HttpMethod.GET, endpoint=path)
-        # Check response and return data or raise error
-        if r["status"] != 200 or "data" not in r:
-            raise ApiError("Error in GET %s" % path)
-        return r["data"]
+        return self.get_resource("rasters", raster_pk)
 
-    def get_detector(self, detector_pk: UUID) -> dict:
+    def get_folder(self, folder_pk: str) -> dict:
+        """
+        Get folder details
+
+        Args:
+            folder_pk: str of the folder whose details we are interested on
+
+        Returns:
+            The folder metadata
+
+        Raises:
+            ApiError: if the server didn't send the right response code
+        """
+        return self.get_resource("folders", folder_pk)
+
+    def get_detector(self, detector_pk: str) -> dict:
         """
         Get detector details
 
         Args:
-            detector_pk: UUID of the detector whose details we are interested on
+            detector_pk: str of the detector whose details we are interested on
 
         Returns:
             The detector metadata
@@ -391,81 +428,30 @@ class API:
         Raises:
             ApiError: if the server didn't send the right response code
         """
-        # Log operation
-        logger.info("Getting detector=%s info" % detector_pk)
-        # Build URL and make request
-        path = "detectors/%s/" % detector_pk
-        r = self._http(method=HttpMethod.GET, endpoint=path)
-        # Check response and return data or raise error
-        if r["status"] != 200 or "data" not in r:
-            raise ApiError("Error in GET %s" % path)
-        return r["data"]
+        return self.get_resource("detectors", detector_pk)
 
-    def get_rasters(self) -> List[dict]:
+    def get_vector_layer(self, vector_layer_pk: str) -> dict:
         """
-        Get rasters list
+        Get vector layer details
+
+        Args:
+            vector_layer_pk: str of the vector layer whose details we are interested on
 
         Returns:
-            The rasters metadata array
+            The vector layer metadata
 
         Raises:
             ApiError: if the server didn't send the right response code
         """
-        # Log operation
-        logger.info("Getting rasters list")
-        return self._paginate_through_list("rasters")
+        return self.get_resource("vector_layers", vector_layer_pk)
 
-    def get_detectors(self, **kwargs) -> List[dict]:
-        """
-        Get detectors list
-
-        Returns:
-            The detectors metadata array
-
-        Raises:
-            ApiError: if the server didn't send the right response code
-        """
-        # Log operation
-        logger.info("Getting detectors list")
-        return self._paginate_through_list("detectors", kwargs)
-
-    def get_rasters_count(self) -> int:
-        resp = self._http(method=HttpMethod.GET, endpoint="rasters/")
-        if resp["status"] != 200:
-            raise ApiError("Error in GET rasters")
-        return resp["data"]["count"]
-
-    def get_detectors_count(self) -> int:
-        resp = self._http(
-            method=HttpMethod.GET,
-            endpoint="detectors/",
-            query_params={"is_runnable": True},
-        )
-        if resp["status"] != 200:
-            raise ApiError("Error in GET detectors")
-        return resp["data"]["count"]
-
-    def check_detection(self) -> bool:
-        """
-        Check the user account has enough info to detect (1 raster and 1 detector)
-
-        Returns:
-            Whether or not we can launch a detection
-
-        Raises:
-            ApiError: if the server didn't send the right response code
-        """
-        if self.get_rasters_count() == 0:
-            return False
-        return self.get_detectors_count() != 0
-
-    def get_detectionarea_upload(self, raster_pk: UUID, upload_pk: UUID) -> dict:
+    def get_detectionarea_upload(self, raster_pk: str, upload_pk: str) -> dict:
         """
         Get info on a Detection Area Upload
 
         Args:
-            raster_pk: UUID of the raster whose Detection Area we are setting
-            upload_pk: UUID of the particular upload we are targeting
+            raster_pk: str of the raster whose Detection Area we are setting
+            upload_pk: str of the particular upload we are targeting
 
         Returns:
             Metadata on the operation status
@@ -484,19 +470,13 @@ class API:
             raise ApiError("Error in GET rasters/detection_areas/upload/")
         return r["data"]
 
-    def detect(
-        self,
-        detector_pk: UUID,
-        raster_pk: UUID,
-        success_callback: Callable,
-        error_callback: Callable,
-    ) -> bool:
+    def detect(self, detector_pk: str, raster_pk: str) -> str:
         """
         Start detection
 
         Args:
-            detector_pk: UUID of the detector we want to use for prediction
-            raster_pk: UUID of the raster we want to predict on
+            detector_pk: str of the detector we want to use for prediction
+            raster_pk: str of the raster we want to predict on
             callback: function to call when detection ends successfully
 
         Returns:
@@ -516,38 +496,23 @@ class API:
             size=len(data),
             mime="application/json",
         )
-        # Check the operation started
+        # Check the operation started and return its identifier
         if r["status"] != 201:
-            logger.error(
-                "Detecting on %s with %s failed with HTTP code %d "
-                % (raster_pk, detector_pk, r["status"])
-            )
-            error_callback()
-            return False
-        # Parse response arguments
-        op_id: UUID = r["data"]["operation_id"]
-        poll_interval: int = r["data"]["poll_interval"]
-        # Launch asynchronous polling operation in a thread
-        self._start_async_polling(
-            self._result_op_poll,  # main
-            success_callback,  # callback
-            op_id,
-            poll_interval,
-            raster_pk,
-        )
-        # Return the detection has started
-        return True
+            raise ApiError(tr("Error starting detection"))
+        operation_id = r["data"]["operation_id"]
+        self.add_operation(operation_id)
+        return operation_id
 
     def _result_op_poll(
-        self, operation_id: UUID, poll_interval: int, raster_pk: UUID
+        self, operation_id: str, poll_interval: int, raster_pk: str
     ) -> Union[dict, bool]:
         """
         Periodically checks for detection results readiness
 
         Args:
-            id: UUID of the result (Detector Run)
+            id: str of the result (Detector Run)
             poll_interval: seconds to wait between each request
-            raster_pk: UUID of the raster we are predicting on
+            raster_pk: str of the raster we are predicting on
 
         Returns:
             A dictionary with the URL of the result and the id of the raster if all
@@ -564,7 +529,14 @@ class API:
         return {"geojson_url": download_url, "raster_id": raster_pk}
 
     def upload_raster(
-        self, name: str, mime: str, content: bytes, size: int, callback: Callable
+        self,
+        name: str,
+        mime: str,
+        content: bytes,
+        size: int,
+        folder_id: str,
+        after_upload_cb: Callable,
+        err_cb: Callable,
     ) -> None:
         """
         Upload and process an image from local
@@ -577,13 +549,13 @@ class API:
             mime: MIME type for the raster (e.g. 'image/tiff')
             content: byte content of the raster image
             size: size in bytes of the image
-            callback: function to call when upload successfully ends
+            folder_id: TODO
 
         Raises:
             ApiError: remote server encountered issues when starting upload
         """
         # Prepare request body and make HTTP call
-        data = json.dumps({"name": name}).encode("utf-8")
+        data = json.dumps({"name": name, "folder_id": folder_id}).encode("utf-8")
         resp = self._http(
             method=HttpMethod.POST,
             endpoint="rasters/upload/file/",
@@ -598,83 +570,48 @@ class API:
         # of the raster in the Picterra platform)
         upload_url = resp["data"]["upload_url"]
         raster_id = resp["data"]["raster_id"]
-        # Start file upload and polling in a separate thread in order not to block QGIS
-        self._start_async_polling(
-            self._upload_and_process_raster,  # main
-            callback,  # callback
-            upload_url,
-            raster_id,
-            content,
-            mime,
-            size,
-        )
-
-    def _upload_and_process_raster(
-        self, upload_url: str, raster_id: UUID, content: bytes, mime: str, size: int
-    ) -> bool:
-        """
-        Send raster data and then polls the raster processing
-
-        Given a raster file, uploads its content to a blobstore, then inform of the
-        previous operation the Picterra API server and order it to start processing
-        the image. Then starts periodically polling the above server in order to wait
-        until the image processing is finished.
-
-        Args:
-            upload_url: URL of the blobstore where send raster data to
-            raster_id: UUID assigned to the raster (e.g. '123e4567-e89b-12d3-a456-426614174000')
-            content: byte content of the raster image
-            mime: MIME type of the image
-            size: size in bytes of the image
-
-        Returns:
-            Whether or not upload and processing completed successfully
-        Raises:
-            ApiError: remote server encountered issues when starting upload
-        """
-        # Log operation start
+        # Start file upload in a separate thread in order not to block QGIS
         logger.info("Start upload and process for %s" % raster_id)
-        # Prepare for HTTP request
-        network = NetworkAccessManager(debug=self.debug)
-        headers = {"Content-Length": str(size), "Content-Type": mime}
-        # Upload file to blobstore server via PUT
-        try:
-            (response, content) = network.request(
-                url=upload_url,
-                method="PUT",
-                headers=headers,
-                body=content,
-                blocking=True,
+
+        def _upload_and_start_process_raster():
+            network = NetworkAccessManager(debug=self.debug)
+            headers = {"Content-Length": str(size), "Content-Type": mime}
+            try:
+                (response, _) = network.request(
+                    url=upload_url,
+                    method="PUT",
+                    headers=headers,
+                    body=content,
+                    blocking=True,
+                )
+            except RequestsException as e:
+                raise ApiError(e)
+            if response.status_code != 200:
+                raise ApiError(tr("Error uploading image to remote cloud storage"))
+            logger.info("Successfully uploaded %s" % str(raster_id))
+            r = self._http(
+                method=HttpMethod.POST,
+                endpoint="rasters/%s/commit/" % raster_id,
+                size=0,
             )
-        # Handle errors
-        except RequestsException as e:
-            raise ApiError(e)
-        if response.status_code != 200:
-            raise ApiError(tr("Error uploading image to remote cloud storage"))
-        # Log blobstore upload end
-        logger.info("Successfully uploaded %s" % str(raster_id))
-        # Start remote processing
-        r = self._http(
-            method=HttpMethod.POST, endpoint="rasters/%s/commit/" % raster_id, size=0
+            if r["status"] != 201:
+                raise ApiError(tr("Error starting raster processing"))
+            op_id = r["data"]["operation_id"]
+            self.add_operation(op_id)
+            return op_id
+
+        self._start_worker(
+            _upload_and_start_process_raster, lambda: after_upload_cb, err_cb
         )
-        # Handle error
-        if r["status"] != 201:
-            raise ApiError(tr("Error starting raster processing"))
-        # Parse response and polls
-        op_id = r["data"]["operation_id"]
-        poll_s = r["data"]["poll_interval"]
-        logger.debug("Polling raster upload operation %s" % op_id)
-        self._wait_until_operation_completes(op_id, poll_s)
-        return True
 
     def upload_detectionarea(
-        self, raster_id: UUID, mime: str, content: bytes, size: int, callback: Callable
+        self, raster_id: str, mime: str, content: bytes, size: int, callback: Callable
     ):
         """
         Upload and process a detection area local GeoJSON file for a remote image
 
         Args:
-            raster_id: UUID of to the raster whose detection area we want to set
+            raster_id: str of to the raster whose detection area we want to set
             mime: MIME type of the file (usually GeoJSON)
             content: byte content of the geometry file
             size: size in bytes of the geometry file
@@ -696,7 +633,7 @@ class API:
         upload_id = resp["data"]["upload_id"]
         # Start waiting upload and processing of the geometry file in another
         # thread in order not to block QGIS
-        self._start_async_polling(
+        self.start_async_polling(
             self._upload_and_process_detectionarea,  # main
             callback,  # callback
             upload_url,
@@ -710,8 +647,8 @@ class API:
     def _upload_and_process_detectionarea(
         self,
         upload_url: str,
-        raster_id: UUID,
-        upload_id: UUID,
+        raster_id: str,
+        upload_id: str,
         content: bytes,
         mime: str,
         size: int,
@@ -727,8 +664,8 @@ class API:
 
         Args:
             upload_url: URL of the blobstore where send file data to
-            raster_id: UUID assigned to the raster whose detection area we are setting
-            upload_id: UUID assigned to the upload of the geometry file
+            raster_id: str assigned to the raster whose detection area we are setting
+            upload_id: str assigned to the upload of the geometry file
             content: byte content of the file
             mime: MIME type of the file (usually JSON)
             size: size in bytes of the geometry file
@@ -780,6 +717,57 @@ class API:
         logger.debug("Polling detection area commit operation %s" % op_id)
         self._wait_until_operation_completes(op_id, poll_s)
         return True
+
+    def load_operations(self):
+        """TODO"""
+        s = QgsSettings()
+        operations: dict[str, dict] = s.value("picterra-operations", {})
+        for (id, op) in operations.items():
+            if op.get("seen", False) is False:
+                data = self.get_operation(id, True)
+                op["status"] = data["status"]
+                if data["status"] != "running":
+                    op["seen"] = True
+        return operations
+
+    def add_operation(self, operation_id: str):
+        """TODO"""
+        operations = self.load_operations()
+        operations[operation_id] = self.get_operation(operation_id, True)
+        operations[operation_id]["seen"] = False
+        s = QgsSettings()
+        s.setValue("picterra-operations", operations)
+
+    def remove_operation(self, operation_id: str):
+        """TODO"""
+        operations = self.load_operations()
+        del operations[operation_id]
+        s = QgsSettings()
+        s.setValue("picterra-operations", operations)
+
+    def reset_operations(self):
+        """TODO"""
+        s = QgsSettings()
+        s.setValue("picterra-operations", {})
+
+    def update_operation_status(self, operation_id: str, status: str):
+        """TODO"""
+        operations = self.load_operations()
+        operations[operation_id]["status"] = status
+        s = QgsSettings()
+        s.setValue("picterra-operations", operations)
+
+    def get_resource_link(self, resource: str, id1: str, id2: str | None = None):
+        """TODO"""
+        url = get_platform_url()
+        if resource == "detector":
+            url += "modes/training/detectors/" + id1
+        elif resource == "raster":
+            url += "modes/detection/projects/" + id1
+        elif resource == "vector layer":
+            url += "modes/detection/projects/%s/raster/%s/vectors" % (id1, id2)
+        else:
+            return url
 
 
 # define Python user-defined exceptions

@@ -177,7 +177,7 @@
             <cursorShape>PointingHandCursor</cursorShape>
            </property>
            <property name="toolTip">
-            <string>Downépad results file</string>
+            <string>Download results file</string>
            </property>
            <property name="toolTipDuration">
             <number>1</number>

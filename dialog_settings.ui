@@ -24,13 +24,16 @@
        <string>Picterra account</string>
       </attribute>
       <layout class="QVBoxLayout" name="verticalLayout_2">
+       <property name="spacing">
+        <number>12</number>
+       </property>
        <item>
         <layout class="QFormLayout" name="form">
          <property name="horizontalSpacing">
           <number>6</number>
          </property>
          <property name="verticalSpacing">
-          <number>14</number>
+          <number>40</number>
          </property>
          <property name="leftMargin">
           <number>4</number>
@@ -71,7 +74,7 @@
            <property name="whatsThis">
             <string>Show and allows to edit the API key allowing QGIS to access the Picterra platform</string>
            </property>
-           <property name="showLockIcon" stdset="0">
+           <property name="showLockIcon">
             <bool>false</bool>
            </property>
           </widget>
@@ -96,81 +99,6 @@
            </property>
           </widget>
          </item>
-         <item row="2" column="0">
-          <widget class="QLabel" name="api_version_label">
-           <property name="text">
-            <string>API version</string>
-           </property>
-          </widget>
-         </item>
-         <item row="2" column="1">
-          <widget class="QSpinBox" name="api_version_spinbox">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="toolTip">
-            <string>Picterra Public API version number</string>
-           </property>
-           <property name="toolTipDuration">
-            <number>2</number>
-           </property>
-           <property name="whatsThis">
-            <string>Version of the Picterra API the plugin accesses</string>
-           </property>
-           <property name="suffix">
-            <string/>
-           </property>
-           <property name="prefix">
-            <string>v</string>
-           </property>
-           <property name="minimum">
-            <number>2</number>
-           </property>
-           <property name="maximum">
-            <number>2</number>
-           </property>
-           <property name="value">
-            <number>2</number>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="0">
-          <widget class="QLabel" name="rastersLabel">
-           <property name="text">
-            <string>#Rasters</string>
-           </property>
-          </widget>
-         </item>
-         <item row="3" column="1">
-          <widget class="QLabel" name="nr_rasters">
-           <property name="text">
-            <string>N/A</string>
-           </property>
-           <property name="alignment">
-            <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
-           </property>
-          </widget>
-         </item>
-         <item row="4" column="0">
-          <widget class="QLabel" name="detectorsLabel">
-           <property name="text">
-            <string>#Detectors</string>
-           </property>
-          </widget>
-         </item>
-         <item row="4" column="1">
-          <widget class="QLabel" name="nr_detectors">
-           <property name="text">
-            <string>N/A</string>
-           </property>
-           <property name="alignment">
-            <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
-           </property>
-          </widget>
-         </item>
         </layout>
        </item>
        <item>
@@ -189,6 +117,12 @@
       <layout class="QGridLayout" name="gridLayout">
        <item row="0" column="0">
         <widget class="QLabel" name="label">
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>30</height>
+          </size>
+         </property>
          <property name="text">
           <string>Locale</string>
          </property>
@@ -211,6 +145,12 @@
        </item>
        <item row="1" column="0">
         <widget class="QLabel" name="softwareVersionLabel">
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>30</height>
+          </size>
+         </property>
          <property name="text">
           <string>Software Version</string>
          </property>
@@ -233,6 +173,12 @@
        </item>
        <item row="2" column="0">
         <widget class="QLabel" name="pluginVersionLabel">
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>30</height>
+          </size>
+         </property>
          <property name="text">
           <string>Plugin Version</string>
          </property>
@@ -250,6 +196,12 @@
        </item>
        <item row="3" column="0">
         <widget class="QLabel" name="pluginCategoryLabel">
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>30</height>
+          </size>
+         </property>
          <property name="text">
           <string>Plugin Category</string>
          </property>
