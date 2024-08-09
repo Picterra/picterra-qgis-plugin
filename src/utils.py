@@ -167,8 +167,11 @@ class Worker(QObject):
     error = pyqtSignal(Exception)
     progress = pyqtSignal(float)
 
+class FileInfo(TypedDict):
+    size: int
+    mime: Optional[str]
 
-def get_file_info(filename: str):
+def get_file_info(filename: str) -> Optional[FileInfo]:
     """Given a file path returns its size (in bytes) and its name"""
     if not os.path.isfile(filename):
         return None

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+from typing import List
 
 from qgis.gui import QgsFileWidget
 from qgis.PyQt.QtCore import QStringListModel
@@ -57,6 +58,8 @@ class PicterraDialogUpload(QDialog):
         da_file_widget: QgsFileWidget = self.ui.file_selector_detectionareas
         da_file_widget.setFilter("GeoJSON (*.json *.geojson)")
         da_file_widget.fileChanged.connect(self._on_geojson_selection_detectionareas)
+        # TODO
+        self.ui.spinner_label.hide()
         # raster
         self.folder_id_raster = None
 
@@ -94,31 +97,21 @@ class PicterraDialogUpload(QDialog):
     def _on_geojson_selection_raster(self) -> None:
         if self.folder_id_raster:
             self.ui.start_upload_button_raster.setEnabled(True)
-
-    def _on_geojson_selection_detectionareas(self) -> None:
-        if self.raster_id_detectionareas:
-            self.ui.start_upload_button_detectionareas.setEnabled(True)
-
-    def _on_raster_selection_changed(self) -> None:
-        """
-        Executed when the user select one or more files, shows upload CTO.
-
-        Once at least one file is selected when can proceed with the upload.
-        """
-        # Show CTO, reset progress bar
-        self.ui.start_upload_button_raster.setEnabled(True)
-        # create model/view for file list
-        file_paths = QgsFileWidget.splitFilePaths(self.ui.file_selector.filePath())
+        file_paths = QgsFileWidget.splitFilePaths(self.ui.file_selector_raster.filePath())
         self.model.setStringList(get_file_info(f)["name"] for f in file_paths)
         self.ui.label_filelist.setText(
             "%s (%d):" % (tr("Selected images"), self.model.rowCount())
         )
 
+    def _on_geojson_selection_detectionareas(self) -> None:
+        if self.raster_id_detectionareas:
+            self.ui.start_upload_button_detectionareas.setEnabled(True)
+
     def start_detectionarea_upload(self) -> None:
         self.file_num = 1
         self.upload_type = "detection area"
         raster_id = self.raster_id_detectionareas
-        geojson_filepath = self.ui.detectionarea_file_selector.filePath()
+        geojson_filepath: str = self.ui.file_selector_detectionareas.filePath()
         logger.debug("Getting detection area from %s" % geojson_filepath)
         # Disable CTO, display progress bar
         self.ui.start_upload_button_detectionareas.setEnabled(False)
@@ -128,7 +121,7 @@ class PicterraDialogUpload(QDialog):
         self.ui.upload_detectionarea_selection_label.hide()
         # Check file is not empty
         info = get_file_info(geojson_filepath)
-        if not info:
+        if info is None:
             logger.error(
                 "Error upload invalid detection area file %s" % geojson_filepath
             )
@@ -152,14 +145,11 @@ class PicterraDialogUpload(QDialog):
                 self.err_box.show()
                 self._reset()
                 return
-        # Open image file as binary
-        with open(geojson_filepath, "rb") as f:
-            # Load file content
+        with open(geojson_filepath, "rb") as f:      
             content = f.read()
             f.close()
             logger.debug("Uploading detection area for %s .." % raster_id)
-            # Launch upload thread
-            try:
+            try: # Launch upload thread
                 self.api.upload_detectionarea(
                     raster_id,
                     "application/json",
@@ -207,40 +197,42 @@ class PicterraDialogUpload(QDialog):
         self.ui.file_selector_raster.hide()
         self.ui.start_upload_button_raster.setEnabled(False)
         logger.debug("%s files to upload" % str(self.file_num))
-        ok_cnt, fail_cnt = 0
-        movie = QMovie(":/plugins/picterra/assets/spinner.gif")
-        self.ui.spinner_label.setMovie(movie)
+        self.movie = QMovie(":/plugins/picterra/assets/spinner.gif")
         self.ui.spinner_label.show()
-        movie.start()
+        self.ui.spinner_label.setMovie(self.movie)
+        self.movie.start()
+        failed_files: List[str] = []
         for file_path in file_paths:
             info = get_file_info(file_path)
             if not info:
+                failed_files.append(file_path)
                 continue
             with open(file_path, "rb") as f:
                 content = f.read()
                 f.close()
                 logger.debug("Uploading %s .." % info["name"])
                 try:
-
-                    def cb():
-                        if ok_cnt + fail_cnt == len(file_paths):
-                            self.info_box = info_box(
-                                "Raster uploads started",
-                                "Started uploading %s rasters, % failed."
-                                % (ok_cnt, fail_cnt),
-                            )
-                            self.info_box.show()
-                            self._reset()
-
                     self.api.upload_raster(  # Launch upload thread (commit will be just launched)
-                        info["name"], info["mime"], content, info["size"], folder_id, cb
+                        info["name"], info["mime"], content, info["size"], folder_id,
                     )
-                    ok_cnt += 1
                 except ApiError as e:
                     error = str(e)
                     self.err_box = error_box(error)
                     self.err_box.show()
-                    fail_cnt += 1
+                    failed_files.append(file_path)
+        self.movie.stop()
+        self.ui.spinner_label.hide()
+        self.info_box = info_box(
+            "Raster uploads started",
+            "Started uploading %s rasters, %d failed (%s)."
+            % (
+                len(file_paths) - len(failed_files),
+                len(failed_files),
+                ', '.join(failed_files)
+            ),
+        )
+        self.info_box.show()
+        self._reset()
 
     def _reset(self) -> None:
         """Resets the upload dialog tabs elements"""
@@ -252,3 +244,6 @@ class PicterraDialogUpload(QDialog):
         self.ui.file_selector_raster.show()
         self.ui.upload_detectionarea_selection_label.show()
         self.ui.file_selector_detectionareas.show()
+        if self.movie:
+            self.movie.stop()
+        self.ui.spinner_label.hide()

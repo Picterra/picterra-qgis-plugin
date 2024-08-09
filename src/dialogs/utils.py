@@ -69,14 +69,14 @@ class PicterraDialogSelect(QWidget):
 
             self.ui.command_select.clicked.connect(cb)
 
-    def get_id(self) -> str | None:
+    def get_id(self) -> Optional[str]:
         return (
             self.ui.list.currentItem().data(Qt.StatusTipRole)
             if self.ui.list.currentItem()
             else None
         )
 
-    def get_name(self) -> str | None:
+    def get_name(self) -> Optional[str]:
         return (
             self.ui.list.currentItem().data(Qt.EditRole)
             if self.ui.list.currentItem()

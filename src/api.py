@@ -3,8 +3,7 @@ import json
 import platform
 from re import search
 from time import sleep as time_sleep
-from typing import (Any, Callable, Dict, List, Literal, Optional, Tuple,
-                    TypedDict, Union)
+from typing import Any, Callable, List, Literal, Optional, Tuple, TypedDict, Union
 
 from qgis.PyQt.QtCore import QT_VERSION_STR, QLocale, QThread
 
@@ -14,11 +13,52 @@ except ImportError:
     from qgis.core import QGis as Qgis, QgsSettings
 
 from .network import NetworkAccessManager, RequestsException
-from .utils import (HttpMethod, Logger, Worker, get_api_base_url,
-                    get_debug_flag, get_platform_url, get_plugin_metadata,
-                    get_plugin_version, get_setting, tr)
+from .utils import (
+    HttpMethod,
+    Logger,
+    Worker,
+    get_api_base_url,
+    get_debug_flag,
+    get_platform_url,
+    get_plugin_version,
+    get_setting,
+    tr,
+)
 
 logger = Logger(__file__)
+
+
+class Detector(TypedDict):
+    id: str
+    name: str
+    is_runnable: bool
+
+
+class Folder(TypedDict):
+    id: str
+    name: str
+    created_at: str
+
+
+class Raster(TypedDict):
+    id: str
+    name: str
+    folder_id: str
+    captured_at: str
+    multispectral: bool
+    tiles_max_zoom: int
+    tiles_min_zoom: int
+    tms_url: str
+
+
+class VectorLayer(TypedDict):
+    id: str
+    name: str
+    color: str
+    count: int
+    created_at: str
+    geojson_urls: List[str]
+    raster_id: str
 
 
 class OperationMetadata(TypedDict):
@@ -27,12 +67,25 @@ class OperationMetadata(TypedDict):
     raster_id: str
 
 
+OperationStatus = Literal["running", "failed", "success"]
+
+
 class Operation(TypedDict):
-    status: Literal["running", "failed", "success"]
+    status: OperationStatus
     type: str
-    errors: dict | None
-    metadata: OperationMetadata | None
-    results: dict[str, Any] | None
+    errors: Optional[dict]
+    metadata: Optional[OperationMetadata]
+    results: Optional[dict[str, Any]]
+    seen: bool
+
+
+ActivityType = Literal["detection", "raster", "detectionareas"]
+
+
+class Activity(TypedDict):
+    type: ActivityType
+    operation_id: Optional[str]  # if None is "fake"
+    operation_data: Optional[Operation]
 
 
 class API:
@@ -88,7 +141,7 @@ class API:
         self.poll_scaling = self.POLL_SCALING_FACTOR if self.debug else 1
         # Multithreading (for async operations)
         self.workers = []
-        self.threads = []
+        self.threads: List[QThread] = []
         # Log info
         logger.info("Built Api instance targeting %s" % self.base_url)
         logger.info("Debug level is %s" % self.debug)
@@ -173,7 +226,7 @@ class API:
 
     def _wait_until_operation_completes(
         self, operation_id: str, poll_interval_s=30
-    ) -> dict:
+    ) -> OperationMetadata:
         """See Picterra Python wrapper"""
         timeout_s: int = self.poll_timeout
         while timeout_s > 0:  # Polling loop
@@ -385,7 +438,7 @@ class API:
                 op_data["folder"] = None
         return op_data
 
-    def get_raster(self, raster_pk: str) -> dict:
+    def get_raster(self, raster_pk: str) -> Raster:
         """
         Get raster details
 
@@ -400,7 +453,7 @@ class API:
         """
         return self.get_resource("rasters", raster_pk)
 
-    def get_folder(self, folder_pk: str) -> dict:
+    def get_folder(self, folder_pk: str) -> Folder:
         """
         Get folder details
 
@@ -415,7 +468,7 @@ class API:
         """
         return self.get_resource("folders", folder_pk)
 
-    def get_detector(self, detector_pk: str) -> dict:
+    def get_detector(self, detector_pk: str) -> Detector:
         """
         Get detector details
 
@@ -430,7 +483,7 @@ class API:
         """
         return self.get_resource("detectors", detector_pk)
 
-    def get_vector_layer(self, vector_layer_pk: str) -> dict:
+    def get_vector_layer(self, vector_layer_pk: str) -> VectorLayer:
         """
         Get vector layer details
 
@@ -445,7 +498,7 @@ class API:
         """
         return self.get_resource("vector_layers", vector_layer_pk)
 
-    def get_detectionarea_upload(self, raster_pk: str, upload_pk: str) -> dict:
+    def get_detectionarea_upload(self, raster_pk: str, upload_pk: str) -> Operation:
         """
         Get info on a Detection Area Upload
 
@@ -500,44 +553,12 @@ class API:
         if r["status"] != 201:
             raise ApiError(tr("Error starting detection"))
         operation_id = r["data"]["operation_id"]
-        self.add_operation(operation_id)
+        self.add_operation("detection", operation_id)
         return operation_id
 
-    def _result_op_poll(
-        self, operation_id: str, poll_interval: int, raster_pk: str
-    ) -> Union[dict, bool]:
-        """
-        Periodically checks for detection results readiness
-
-        Args:
-            id: str of the result (Detector Run)
-            poll_interval: seconds to wait between each request
-            raster_pk: str of the raster we are predicting on
-
-        Returns:
-            A dictionary with the URL of the result and the id of the raster if all
-            went good, False otherwise
-        """
-        # Log operation start
-        logger.debug(
-            "Init worker main polling result op %s every %ss"
-            % (operation_id, poll_interval / self.poll_scaling)
-        )
-        logger.debug("Polling detection operation %s" % operation_id)
-        op_data = self._wait_until_operation_completes(operation_id, poll_interval)
-        download_url = op_data["results"]["url"]
-        return {"geojson_url": download_url, "raster_id": raster_pk}
-
     def upload_raster(
-        self,
-        name: str,
-        mime: str,
-        content: bytes,
-        size: int,
-        folder_id: str,
-        after_upload_cb: Callable,
-        err_cb: Callable,
-    ) -> None:
+        self, name: str, mime: str, content: bytes, size: int, folder_id: str
+    ) -> str:
         """
         Upload and process an image from local
 
@@ -572,53 +593,52 @@ class API:
         raster_id = resp["data"]["raster_id"]
         # Start file upload in a separate thread in order not to block QGIS
         logger.info("Start upload and process for %s" % raster_id)
-
-        def _upload_and_start_process_raster():
-            network = NetworkAccessManager(debug=self.debug)
-            headers = {"Content-Length": str(size), "Content-Type": mime}
-            try:
-                (response, _) = network.request(
-                    url=upload_url,
-                    method="PUT",
-                    headers=headers,
-                    body=content,
-                    blocking=True,
-                )
-            except RequestsException as e:
-                raise ApiError(e)
-            if response.status_code != 200:
-                raise ApiError(tr("Error uploading image to remote cloud storage"))
-            logger.info("Successfully uploaded %s" % str(raster_id))
-            r = self._http(
-                method=HttpMethod.POST,
-                endpoint="rasters/%s/commit/" % raster_id,
-                size=0,
+        network = NetworkAccessManager(debug=self.debug)
+        headers = {"Content-Length": str(size), "Content-Type": mime}
+        idx = self.add_operation("raster", None)
+        try:
+            (response, _) = network.request(
+                url=upload_url,
+                method="PUT",
+                headers=headers,
+                body=content,
+                blocking=True,
             )
-            if r["status"] != 201:
-                raise ApiError(tr("Error starting raster processing"))
-            op_id = r["data"]["operation_id"]
-            self.add_operation(op_id)
-            return op_id
-
-        self._start_worker(
-            _upload_and_start_process_raster, lambda: after_upload_cb, err_cb
+        except RequestsException as e:
+            raise ApiError(e)
+        if response.status_code != 200:
+            self.update_operation_status("failed", idx)
+            raise ApiError(tr("Error uploading image to remote cloud storage"))
+        logger.info("Successfully uploaded %s" % str(raster_id))
+        r = self._http(
+            method=HttpMethod.POST,
+            endpoint="rasters/%s/commit/" % raster_id,
+            size=0,
         )
+        if r["status"] != 201:
+            self.update_operation_status("failed", idx)
+            raise ApiError(tr("Error starting raster processing"))
+        op_id = r["data"]["operation_id"]
+        self.start_operation(idx, op_id)
+        return op_id
 
     def upload_detectionarea(
-        self, raster_id: str, mime: str, content: bytes, size: int, callback: Callable
+        self, raster_id: str, mime: str, content: bytes, size: int
     ):
         """
-        Upload and process a detection area local GeoJSON file for a remote image
+        Upload a detection area local GeoJSON file and starts its processing (commit),
+        returning the latter operation id
 
         Args:
             raster_id: str of to the raster whose detection area we want to set
             mime: MIME type of the file (usually GeoJSON)
             content: byte content of the geometry file
             size: size in bytes of the geometry file
-            callback: function to call once operation is finished
 
         Raises:
             ApiError: remote server encountered issues when starting upload
+
+        Returns: UUID of the operation
         """
         # Make HTTP request
         resp = self._http(
@@ -631,55 +651,13 @@ class API:
         # Parse response
         upload_url = resp["data"]["upload_url"]
         upload_id = resp["data"]["upload_id"]
-        # Start waiting upload and processing of the geometry file in another
-        # thread in order not to block QGIS
-        self.start_async_polling(
-            self._upload_and_process_detectionarea,  # main
-            callback,  # callback
-            upload_url,
-            raster_id,
-            upload_id,
-            content,
-            mime,
-            size,
-        )
-
-    def _upload_and_process_detectionarea(
-        self,
-        upload_url: str,
-        raster_id: str,
-        upload_id: str,
-        content: bytes,
-        mime: str,
-        size: int,
-    ) -> bool:
-        """
-        Send geometry data for the detection area of a raster and then
-        polls its processing end
-
-        Given a geometry file, uploads its content to a blobstore, then inform of the
-        previous operation the Picterra API server and order it to start processing
-        the file itself. Then starts periodically polling the above server in order
-        to wait until the processing is finished.
-
-        Args:
-            upload_url: URL of the blobstore where send file data to
-            raster_id: str assigned to the raster whose detection area we are setting
-            upload_id: str assigned to the upload of the geometry file
-            content: byte content of the file
-            mime: MIME type of the file (usually JSON)
-            size: size in bytes of the geometry file
-
-        Returns:
-            Whether or not upload and processing completed successfully
-        Raises:
-            ApiError: remote server encountered issues during operation
-        """
+        # TODO
         # Log operation start
         logger.info(
-            "Start raster=%s detection area (size %d) upload=%s and process"
+            "Start raster=%s detection area (size %d) upload=%s"
             % (raster_id, size, upload_id)
         )
+        idx = self.add_operation("detectionareas", None)
         # Prepare HTTP request
         network = NetworkAccessManager(debug=self.debug)
         headers = {"Content-Length": str(size), "Content-Type": mime}
@@ -694,8 +672,10 @@ class API:
             )
         # Handle errors
         except RequestsException as e:
+            self.update_operation_status("failed", idx)
             raise ApiError(e)
         if response.status_code != 200:
+            self.update_operation_status("failed", idx)
             raise ApiError(
                 tr("Error uploading detection area file to remote cloud storage")
             )
@@ -708,56 +688,84 @@ class API:
             % (raster_id, upload_id),
             size=0,
         )
-        # Handle processing start error
+        # TODO
         if r["status"] != 201:
+            self.update_operation_status("failed", idx)
             raise ApiError(tr("Error starting detection area processing"))
-        # Parse response and polls
         op_id = r["data"]["operation_id"]
-        poll_s = r["data"]["poll_interval"]
-        logger.debug("Polling detection area commit operation %s" % op_id)
-        self._wait_until_operation_completes(op_id, poll_s)
-        return True
+        self.start_operation(idx, op_id)
+        return op_id
 
-    def load_operations(self):
+    def load_activities(self) -> List[Activity]:
         """TODO"""
         s = QgsSettings()
-        operations: dict[str, dict] = s.value("picterra-operations", {})
-        for (id, op) in operations.items():
-            if op.get("seen", False) is False:
+        operations: List[Activity] = s.value("picterra-operations", [])
+        for op in operations:
+            if op["operation_id"] is None:
+                continue
+            elif op.get("seen", False) is False:
                 data = self.get_operation(id, True)
                 op["status"] = data["status"]
                 if data["status"] != "running":
                     op["seen"] = True
         return operations
 
-    def add_operation(self, operation_id: str):
-        """TODO"""
-        operations = self.load_operations()
-        operations[operation_id] = self.get_operation(operation_id, True)
-        operations[operation_id]["seen"] = False
-        s = QgsSettings()
-        s.setValue("picterra-operations", operations)
+    def _find_started_operation_index(self, operation_id: str) -> Optional[int]:
+        ops = self.load_activities()
+        return next(
+            (i for (i, o) in enumerate(ops) if o["operation_id"]) == operation_id,
+        )
 
-    def remove_operation(self, operation_id: str):
+    def add_operation(self, type: ActivityType, operation_id: Optional[str] = None):
         """TODO"""
-        operations = self.load_operations()
-        del operations[operation_id]
+        operations = self.load_activities()
+        op: Activity
+        if operation_id is not None:
+            op_data = self.get_operation(id, True)
+            op = {"type": type, "operation_data": op_data, "operation_id": operation_id}
+        else:
+            op = {"type": type, "operation_data": None, "operation_id": None}
+        operations.append(op)
         s = QgsSettings()
         s.setValue("picterra-operations", operations)
+        return len(operations) - 1
 
     def reset_operations(self):
         """TODO"""
         s = QgsSettings()
-        s.setValue("picterra-operations", {})
+        s.setValue("picterra-operations", [])
 
-    def update_operation_status(self, operation_id: str, status: str):
+    def refresh_operations(self):
         """TODO"""
-        operations = self.load_operations()
-        operations[operation_id]["status"] = status
+        s = QgsSettings()
+        s.setValue("picterra-operations", self.load_activities())
+
+    def update_operation_status(
+        self, status: OperationStatus, op_id=Optional[str], op_idx=Optional[int]
+    ):
+        """TODO"""
+        assert op_id or op_idx
+        if op_id is not None:
+            operations = self.load_activities()
+            idx = self._find_started_operation_index(op_id)
+            if idx is None:
+                raise RuntimeError("Cannot find operation with id " + op_id)
+        else:
+            idx = op_idx
+        operations[idx]["status"] = status
         s = QgsSettings()
         s.setValue("picterra-operations", operations)
 
-    def get_resource_link(self, resource: str, id1: str, id2: str | None = None):
+    def start_operation(self, idx: int, operation_id: str):
+        """TODO"""
+        operations = self.load_activities()
+        idx = self._find_started_operation_index(operation_id)
+        operations[idx]["operation_id"] = operation_id
+        operations[idx]["operation_data"] = self.get_operation(operation_id, True)
+        s = QgsSettings()
+        s.setValue("picterra-operations", operations)
+
+    def get_resource_link(self, resource: str, id1: str, id2: Optional[str] = None):
         """TODO"""
         url = get_platform_url()
         if resource == "detector":
@@ -781,15 +789,3 @@ class ApiError(Exception):
     def __init__(self, *args, **kwargs):
         Exception.__init__(self, *args, **kwargs)
         logger.error(args[0])
-
-
-class AuthenticationError(Exception):
-    """
-    Exception when trying to access API without right credentials
-
-    Always log to warning.
-    """
-
-    def __init__(self, *args, **kwargs):
-        Exception.__init__(self, *args, **kwargs)
-        logger.warning(args[0])

@@ -26,16 +26,23 @@ class PicterraDialogOperations(QDialog):
         self.ui.setupUi(self)
         self.iface = data["iface"]
         self.api = data["api"]
-        self.ui.reset_button.clicked.connect(lambda: self.api.reset_operations())
+        def refresh ():
+            self.operations = self.api.load_activities()
+        self.ui.refresh_button.clicked.connect(refresh)
+        def reset ():
+            self.api.reset_operations()
+            self.operations = []
+            table.setRowCount(0)
+        self.ui.reset_button.clicked.connect(reset)
         try:
-            self.operations = self.api.load_operations()
+            self.operations = self.api.load_activities()
         except ApiError as e:
             err_msg = "Error loading recent activity: " + str(e)
             logger.error(err_msg)
             self.err_box = error_box(err_msg)
             self.err_box.show()
-            self.operations = {}
-        op_cnt = len(self.operations.keys())
+            self.operations = []
+        op_cnt = len(self.operations)
         logger.info("Loaded %s operations" % str(op_cnt))
         table = self.ui.tableWidget
         table.setRowCount(op_cnt)
@@ -43,15 +50,15 @@ class PicterraDialogOperations(QDialog):
         table.setColumnCount(len(labels))
         table.setHorizontalHeaderLabels(labels)
         running_ops: Dict[str, int] = {}
-        for i, op in enumerate(self.operations.values()):
+        for i, op in enumerate(self.operations):
             table.setItem(i, 0, QTableWidgetItem(op["type"]))
             table.setItem(i, 1, QTableWidgetItem(op["status"]))
             if op["status"] == "running":
                 o_id = op["id"]
                 running_ops[o_id] = i
-            if op["raster"]:
+            if op.get("raster", None):
                 table.setItem(i, 2, QTableWidgetItem(op["raster"]["name"]))
-            if op["detector"]:
+            if op.get("detector", None):
                 table.setItem(i, 3, QTableWidgetItem(op["detector"]["name"]))
         if len(running_ops) != 0:
             spn_lbl = self.ui.spinner_label
